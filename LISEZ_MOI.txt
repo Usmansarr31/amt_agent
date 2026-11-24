@@ -1,0 +1,124 @@
+AMT - Tableau de bord Streamlit
+ATSA-ASECNA Innovation Days 2026 - AI Agents Challenge, fiche n°02
+L'outil assiste, l'expert métier valide. Données fictives (bac à sable).
+
+Contenu du dossier
+  app.py             interface Streamlit
+  core.py            nettoyage, calculs, commentaire de tendance
+  questions.py       réponse calculée localement (secours du chat), sans modèle externe ni Internet
+  copilot.py         client Direct Line de l'agent Copilot Studio (page Discuter)
+  faux_copilot.py    faux serveur Direct Line local pour tester sans l'agent réel
+  traces.py          registre de validation et journal de l'assistant, conservés sur disque
+  dernier_fichier/   dernier fichier chargé dans « Avancé » (utilisé seulement sans AMT_DEFAULT_FILE)
+  traces/            journaux créés à l'usage (JSON Lines, un enregistrement par ligne, jamais modifié)
+  test_questions.py  tests d'acceptation (chiffres de contrôle + questions de contrôle du chat)
+  donnees/           fichiers de contrôle (organisateurs ; variante piégée en CSV, XML et PDF)
+
+Installation (une seule fois)
+  Sur Debian/Ubuntu récents, pip refuse d'installer dans le Python système : utiliser un environnement virtuel.
+    python3 -m venv .venv
+    .venv/bin/pip install -r requirements.txt
+  (puis « source .venv/bin/activate » dans chaque nouveau terminal)
+
+Lancement (interface unique avec l'agent Copilot Studio)
+  Depuis ce dossier, dans un terminal :
+    cd ~/Desktop/amt_streamlit/streamlit_app
+    read -rs COPILOT_DIRECTLINE_SECRET && export COPILOT_DIRECTLINE_SECRET     (coller le secret, puis Entrée)
+    AMT_DEFAULT_FILE=donnees/DONNEES_03_ATM_ANALYSE_TRAFIC.xlsx ../.venv/bin/streamlit run app.py
+  - AMT_DEFAULT_FILE : le jeu de données de l'agent (le fichier Excel des organisateurs), chargé au démarrage ;
+    chemin absolu ou relatif à ce dossier. Le tableau de bord s'affiche directement, sans upload.
+  - COPILOT_DIRECTLINE_SECRET : secret Direct Line de l'agent (Copilot Studio > Paramètres > Sécurité >
+    Sécurité du canal web). « read -s » le saisit sans l'afficher ni le garder dans l'historique du terminal.
+    L'application ne le lit que dans l'environnement : jamais depuis un fichier, jamais écrit, journalisé
+    ni affiché. Ne pas le mettre dans un script ni dans ce dossier.
+  - Facultatif : COPILOT_DIRECTLINE_URL (autre domaine Direct Line, ex. régional), AMT_AGENT_URL (page « Voir l'agent »).
+
+Utilisation
+  Barre latérale :
+    Tableau de bord : Vue d'ensemble (graphiques + commentaire de tendance), Comparaison, Retards, Anomalies
+      (validation par l'expert), Qualité des données (journal, réconciliation), Traçabilité (registre de
+      validation + journal des échanges avec l'agent), Exports.
+    Assistant : Discuter (avec l'agent AMT), Voir l'agent (l'agent intégré par son adresse ou son <iframe>).
+    « Jeu de données : <fichier>, identique à celui de l'agent », période du fichier, filtres (aérodromes, période,
+    catégorie de vol, origine / destination).
+    « Avancé » (replié) : remplacer le jeu de données si besoin (CSV, Excel, XML ou PDF) ; le libellé indique alors
+    « remplacé : différent de celui de l'agent ». Retirer le fichier pour revenir à celui de l'agent.
+    Sans AMT_DEFAULT_FILE, le dernier fichier chargé dans « Avancé » est réutilisé (dossier dernier_fichier/).
+  Formats : XML (un enregistrement par élément, champs en sous-éléments ou attributs) ; PDF (tableaux avec les
+  colonnes date, aerodrome, type_mouvement, nombre_mouvements en en-tête ; pas de PDF scanné). XML et PDF sont
+  nettoyés avec exactement les mêmes règles que le CSV. Un PDF de 60 pages prend ~20 s.
+  Exports Excel, PDF ou CSV depuis la page Exports (commentaire de tendance inclus).
+
+Catégorie de vol et origine / destination
+  Vue d'ensemble : graphiques et tableaux de répartition (par aérodrome, avec la part en %), repris dans le PDF
+  et dans l'Excel (feuilles « Repartition categorie » et « Repartition origine »).
+  Chat : « vols réguliers / non réguliers / aviation générale », « internationaux / domestiques / région centre /
+  région ouest » filtrent la réponse ; « par catégorie » ou « par origine » ajoutent la répartition.
+
+Traçabilité et validation
+  Chaque décision de l'expert (page Anomalies) et chaque question posée à l'assistant (page Discuter) est
+  enregistrée dans traces/, avec l'horodatage, le nom du fichier et son empreinte SHA-256 : elle survit au
+  rechargement de la page et reste liée à la version exacte des données.
+  Le PDF indique le statut de validation (anomalies traitées / en attente), la décision pour chaque anomalie,
+  le registre et les questions posées. L'Excel contient le registre et le journal complet (question, réponse,
+  chiffres). Pour une démonstration propre, vider ou renommer le dossier traces/ avant de commencer.
+  Variable AMT_TRACES_DIR : autre emplacement pour ce dossier.
+
+Commentaire de tendance
+  Calculé par core.commentaire_tendance, sans modèle externe : mois de pointe et mois le plus bas
+  (mois complets seulement), variation entre le premier et le dernier mois complet, évolution par aérodrome,
+  mois incomplets exclus et cités. Aucune cause n'est avancée : « cause inconnue, à vérifier par l'expert métier ».
+  Dans l'interface, il suit les filtres du menu de gauche ; dans le PDF et l'Excel, il porte sur tout le fichier.
+
+Discuter avec l'agent AMT (barre latérale > Assistant > Discuter)
+  Le chat parle uniquement à l'agent Copilot Studio, par l'API Direct Line en mode secret. Seule la question est
+  envoyée (jamais les données du fichier) ; la réponse de l'agent s'affiche telle quelle.
+  Séquence : jeton (POST https://directline.botframework.com/v3/directline/tokens/generate avec le secret) ->
+  conversation -> envoi de la question -> lecture des activités toutes les 2 s (watermark), 90 s au maximum.
+  Chaque envoi/lecture peut durer jusqu'à 60 s : un agent lent n'est pas une erreur. Réponse complète : message
+  de l'agent suivi d'une activité « event », ou 5 s sans nouvelle activité après sa réponse.
+  Pendant l'attente : « L'agent analyse le fichier... », puis « L'agent réfléchit... » si l'agent signale qu'il écrit.
+  La conversation garde le même identifiant (l'agent se souvient du contexte) ; « Nouvelle conversation »
+  (barre latérale) en ouvre une autre.
+  Agent injoignable (secret absent ou refusé, réseau, délai dépassé) : message clair et bouton discret
+  « Voir la réponse calculée localement » (secours : calcul sur le jeu de données nettoyé, voir ci-dessous).
+  Chaque échange est journalisé (page Traçabilité, Excel, PDF) avec sa source et l'identifiant de conversation.
+  Test sans agent réel : python faux_copilot.py   puis
+    COPILOT_DIRECTLINE_SECRET=faux-secret-de-test COPILOT_DIRECTLINE_URL=http://localhost:8765 streamlit run app.py
+
+Réponse calculée localement (secours, questions.py)
+  Sans modèle externe ni Internet, sur le fichier nettoyé COMPLET. Chaque réponse donne le chiffre, la méthode
+  (filtres, lignes retenues, jours renseignés) et « Validation de l'expert métier requise. Données fictives ».
+  Mois de moins de 28 jours signalés. Questions comprises : totaux par aérodrome / mois / période, comparaisons,
+  arrivées ou départs, retard moyen, anomalies, évolution, catégorie de vol, origine / destination,
+  prévision INDICATIVE sur demande. Refus : décisions opérationnelles, demandes de révéler le code ou de
+  contourner les règles. Information absente : signalée, jamais estimée. Cause : toujours « inconnue, à vérifier ».
+
+Voir l'agent (barre latérale > Assistant > Voir l'agent)
+  1. Copilot Studio : ouvrir l'agent, cliquer sur « Publier ».
+  2. Ouvrir « Canaux » : « Site web de démonstration » (copier l'adresse https://) ou
+     « Site web personnalisé » (copier le code <iframe>).
+  3. Coller l'adresse ou le code dans la zone prévue : l'agent s'affiche dans la page.
+  4. Si l'affichage intégré est bloqué, utiliser le bouton « Ouvrir l'agent dans un nouvel onglet ».
+  Seule l'adresse src (https) d'un code <iframe> est utilisée : aucun script collé n'est exécuté.
+  Zone vide : rien n'est affiché.
+
+Apparence
+  Thème clair/sombre dans .streamlit/config.toml (polices système, aucune ressource Internet).
+  Lancer streamlit depuis ce dossier pour que le thème soit pris en compte.
+
+Tests
+  python test_questions.py
+  (autres fichiers : AMT_FICHIER_ORGA=... AMT_FICHIER_PIEGE=... python test_questions.py)
+
+Chiffres de contrôle
+  Fichier des organisateurs : total nettoyé 110 229, brut 110 266, 1 anomalie (DAK-SIM, arrivées, 14/08/2025, 290) ;
+    Dakar janvier 2025 : 2 139 (1 113 arrivées, 1 026 départs) ; retards pondérés LME 14,20, NIM 13,98, ABJ 13,95, DAK 13,78.
+  Variante piégée : total nettoyé 55 643, brut 55 711, 2 anomalies (DLA-SIM arrivées 27/08/2025, BKO-SIM départs
+    05/10/2025) ; Douala novembre 2025 : 1 512 (753 / 759) ; Bamako janvier 2026 : 1 009 ; Douala toute la période : 20 298 ;
+    mai 2025 : 5 474 ; novembre 2025 : 4 041 ; février 2026 incomplet (17 jours sur 28) : 2 515 ;
+    2 textes ressemblant à des consignes (colonne source, lignes 2109 et 2554) ignorés et signalés dans le journal.
+
+Règles : identiques à l'agent Copilot Studio (doublons retirés, vides et négatifs exclus sans imputation,
+zéro enregistré conservé, jour absent non remplacé par zéro, anomalie si |score MAD| > 6, retard pondéré par
+nombre_mouvements, mois incomplet < 28 jours, colonne source traitée comme une donnée).

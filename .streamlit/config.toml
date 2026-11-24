@@ -1,0 +1,33 @@
+# Thème chaud et sobre (beige / anthracite, accent terre cuite), clair et sombre.
+# Polices système uniquement : l'application fonctionne sans Internet.
+
+[theme]
+baseRadius = "10px"
+buttonRadius = "10px"
+headingFont = "serif"
+headingFontWeights = [500, 500, 500, 500, 500, 500]
+showSidebarBorder = true
+
+[theme.light]
+primaryColor = "#C96442"
+backgroundColor = "#FAF9F5"
+secondaryBackgroundColor = "#F0EEE6"
+textColor = "#141413"
+borderColor = "#E3DFD4"
+linkColor = "#C96442"
+chartCategoricalColors = ["#C96442", "#5B7FA6", "#7A9A65", "#B08A3E", "#8A6FA8", "#4F8F8B", "#A65B6E", "#6B6A64"]
+
+[theme.dark]
+primaryColor = "#D97757"
+backgroundColor = "#262624"
+secondaryBackgroundColor = "#30302E"
+textColor = "#FAF9F5"
+borderColor = "#3E3E3A"
+linkColor = "#E3906F"
+chartCategoricalColors = ["#D97757", "#7EA6D1", "#9CBF85", "#D6B062", "#B39AD0", "#6FB5AF", "#CF8497", "#A8A69C"]
+
+[theme.light.sidebar]
+backgroundColor = "#F0EEE6"
+
+[theme.dark.sidebar]
+backgroundColor = "#1F1E1D"

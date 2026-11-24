@@ -1,0 +1,12 @@
+# Journaux et fichiers de travail locaux (jamais publiés)
+traces/
+dernier_fichier/
+__pycache__/
+*.pyc
+.venv/
+# Outils de l'éditeur / de l'assistant de code
+.claude/
+.agents/
+# Secrets Streamlit éventuels
+.streamlit/secrets.toml
+.env
