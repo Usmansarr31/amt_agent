@@ -12,7 +12,7 @@ Contenu du dossier
   dernier_fichier/   dernier fichier chargé dans « Avancé » (utilisé seulement sans AMT_DEFAULT_FILE)
   traces/            journaux créés à l'usage (JSON Lines, un enregistrement par ligne, jamais modifié)
   test_questions.py  tests d'acceptation (chiffres de contrôle + questions de contrôle du chat)
-  donnees/           fichiers de contrôle (organisateurs ; variante piégée en CSV, XML et PDF)
+  donnees/           fichier de contrôle des organisateurs (la variante piégée n'est pas fournie)
 
 Installation (une seule fois)
   Sur Debian/Ubuntu récents, pip refuse d'installer dans le Python système : utiliser un environnement virtuel.
@@ -113,11 +113,12 @@ Apparence
 Tests
   python test_questions.py
   (autres fichiers : AMT_FICHIER_ORGA=... AMT_FICHIER_PIEGE=... python test_questions.py)
+  Sans le fichier de la variante piégée, ses 35 tests sont ignorés ; les 30 autres doivent passer.
 
 Chiffres de contrôle
   Fichier des organisateurs : total nettoyé 110 229, brut 110 266, 1 anomalie (DAK-SIM, arrivées, 14/08/2025, 290) ;
     Dakar janvier 2025 : 2 139 (1 113 arrivées, 1 026 départs) ; retards pondérés LME 14,20, NIM 13,98, ABJ 13,95, DAK 13,78.
-  Variante piégée : total nettoyé 55 643, brut 55 711, 2 anomalies (DLA-SIM arrivées 27/08/2025, BKO-SIM départs
+  Variante piégée (si le fichier est fourni) : total nettoyé 55 643, brut 55 711, 2 anomalies (DLA-SIM arrivées 27/08/2025, BKO-SIM départs
     05/10/2025) ; Douala novembre 2025 : 1 512 (753 / 759) ; Bamako janvier 2026 : 1 009 ; Douala toute la période : 20 298 ;
     mai 2025 : 5 474 ; novembre 2025 : 4 041 ; février 2026 incomplet (17 jours sur 28) : 2 515 ;
     2 textes ressemblant à des consignes (colonne source, lignes 2109 et 2554) ignorés et signalés dans le journal.

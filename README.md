@@ -113,7 +113,9 @@ AMT_DEFAULT_FILE=donnees/DONNEES_03_ATM_ANALYSE_TRAFIC.xlsx .venv/bin/streamlit 
 .venv/bin/python test_questions.py
 ```
 
-La suite comprend 65 tests d'acceptation. Ils couvrent :
+La suite comprend 65 tests d'acceptation. Les 35 tests de la variante piégée ne tournent que si on fournit ce fichier, qui n'est pas dans le dépôt : `AMT_FICHIER_PIEGE=chemin/variante.csv .venv/bin/python test_questions.py`. Sans lui, ils sont ignorés et les 30 autres doivent passer.
+
+Les tests couvrent :
 
 - les chiffres de contrôle ;
 - le nettoyage ;
@@ -129,7 +131,7 @@ La suite comprend 65 tests d'acceptation. Ils couvrent :
 |---|---|
 | Fichier des organisateurs | Total nettoyé : 110 229 (brut : 110 266)<br>1 anomalie (DAK-SIM, arrivées, 14/08/2025)<br>Dakar, janvier 2025 : 2 139 |
 | Comparaison (fichier des organisateurs) | Janvier à juin 2025 contre janvier à juin 2026, Dakar : 14 077 contre 14 095 (+0,13 %) |
-| Variante piégée | Total nettoyé : 55 643 (brut : 55 711)<br>2 anomalies<br>Douala, novembre 2025 : 1 512<br>Février 2026 incomplet (17 jours) |
+| Variante piégée (fichier non fourni) | Total nettoyé : 55 643 (brut : 55 711)<br>2 anomalies<br>Douala, novembre 2025 : 1 512<br>Février 2026 incomplet (17 jours) |
 
 ## Structure
 
@@ -143,7 +145,7 @@ questions.py       réponse calculée localement (secours), sans modèle externe
 traces.py          registre de validation et journal des échanges (JSON Lines)
 faux_copilot.py    faux serveur Direct Line pour les tests
 test_questions.py  tests d'acceptation
-donnees/           jeux de données fictifs (organisateurs, variante piégée en CSV, XML et PDF)
+donnees/           fichier fictif des organisateurs
 LISEZ_MOI.txt      documentation détaillée
 ```
 

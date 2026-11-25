@@ -314,6 +314,7 @@ class Comparaison(unittest.TestCase):
         self.assertEqual(dak["Écart % (moyenne par jour)"], 0.13)
         self.assertEqual(dak["Écart % (total)"], 0.13)
 
+    @unittest.skipUnless(Path(PIEGE).exists(), f"fichier absent : {PIEGE}")
     def test_periodes_par_defaut_variante(self):
         _, _, mois, _ = charger(PIEGE)
         a, b = core.periodes_comparables(mois)  # pas d'année précédente : période qui précède, mois complets
