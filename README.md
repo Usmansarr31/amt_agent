@@ -46,12 +46,23 @@ python3 -m venv .venv
 
 ## Lancement
 
+| Système | Commande |
+|---|---|
+| Linux / macOS | `./lancer.sh` |
+| Windows | double-cliquer sur `lancer.bat`, ou taper `lancer.bat` dans un terminal |
+
+Le script demande le secret Direct Line sans l'afficher. Collez-le puis appuyez sur Entrée, ou appuyez directement sur Entrée pour lancer sans l'agent. Le secret n'est écrit dans aucun fichier.
+
+Le script charge le fichier des organisateurs et trouve tout seul l'environnement `.venv`. Les options sont transmises à Streamlit, par exemple `./lancer.sh --server.port 8502`.
+
+L'application s'ouvre sur http://localhost:8501. Le jeu de données est chargé automatiquement, sans upload.
+
+Pour lancer sans script :
+
 ```bash
 read -rs COPILOT_DIRECTLINE_SECRET && export COPILOT_DIRECTLINE_SECRET   # coller le secret, puis Entrée
 AMT_DEFAULT_FILE=donnees/DONNEES_03_ATM_ANALYSE_TRAFIC.xlsx .venv/bin/streamlit run app.py
 ```
-
-L'application s'ouvre sur http://localhost:8501. Le jeu de données est chargé automatiquement, sans upload.
 
 | Variable | Rôle |
 |---|---|
@@ -123,6 +134,8 @@ La suite comprend 65 tests d'acceptation. Ils couvrent :
 ## Structure
 
 ```
+lancer.sh          lancement sous Linux / macOS (demande le secret sans l'afficher)
+lancer.bat         lancement sous Windows
 app.py             interface Streamlit (tableau de bord, discussion, navigation)
 core.py            lecture (CSV, Excel, XML, PDF), nettoyage, calculs, commentaire de tendance
 copilot.py         client Direct Line de l'agent Copilot Studio (mode secret)

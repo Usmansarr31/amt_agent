@@ -21,7 +21,10 @@ Installation (une seule fois)
   (puis « source .venv/bin/activate » dans chaque nouveau terminal)
 
 Lancement (interface unique avec l'agent Copilot Studio)
-  Depuis ce dossier, dans un terminal :
+  Le plus simple :  ./lancer.sh  (Linux / macOS)   ou   lancer.bat  (Windows, double-clic possible).
+  Le script demande le secret sans l'afficher (Entrée vide : lancement sans l'agent), charge le fichier des
+  organisateurs et trouve l'environnement .venv. Options transmises à streamlit : ./lancer.sh --server.port 8502
+  À la main, depuis ce dossier, dans un terminal :
     cd ~/Desktop/amt_streamlit/streamlit_app
     read -rs COPILOT_DIRECTLINE_SECRET && export COPILOT_DIRECTLINE_SECRET     (coller le secret, puis Entrée)
     AMT_DEFAULT_FILE=donnees/DONNEES_03_ATM_ANALYSE_TRAFIC.xlsx ../.venv/bin/streamlit run app.py
