@@ -15,8 +15,10 @@ de questions posées dans la conversation. Questions spéciales pour les tests :
   « sans event »  -> réponse sans activité « event » finale (fin détectée par le silence) ;
   « silence »     -> aucune réponse ;  « reflechit » -> « typing » toutes les secondes sans jamais répondre ;
   « panne »       -> erreur HTTP 500 à l'envoi.
+  « fichier »     -> second message avec un CSV joint (data:), un lien PDF (https) et une carte adaptative.
 GET /_recus renvoie les activités reçues (pour vérifier que seule la question est envoyée).
 """
+import base64
 import json
 import os
 import re
@@ -132,8 +134,17 @@ class Gestionnaire(BaseHTTPRequestHandler):
                 _ajouter(conv, {"type": "message", "from": bot, "replyToId": ident,
                                 "text": f"**Réponse du faux serveur de test** à : « {texte} »"}, 1.5)
                 _ajouter(conv, {"type": "typing", "from": bot, "replyToId": ident}, 2.0)
-                _ajouter(conv, {"type": "message", "from": bot, "replyToId": ident,
-                                "text": f"Question n°{n} dans cette conversation ({conv})."}, 5.0)
+                second = {"type": "message", "from": bot, "replyToId": ident,
+                          "text": f"Question n°{n} dans cette conversation ({conv})."}
+                if "fichier" in texte.lower():  # pièces jointes, comme un agent qui génère un export
+                    csv_b64 = base64.b64encode("aerodrome;total\nDAK-SIM;2139\n".encode()).decode()
+                    second["attachments"] = [
+                        {"contentType": "text/csv", "name": "export_agent.csv",
+                         "contentUrl": f"data:text/csv;base64,{csv_b64}"},
+                        {"contentType": "application/pdf", "name": "rapport_agent.pdf",
+                         "contentUrl": "https://exemple.invalid/rapport_agent.pdf"},
+                        {"contentType": "application/vnd.microsoft.card.adaptive", "content": {}}]
+                _ajouter(conv, second, 5.0)
                 if "sans event" not in texte.lower():
                     _ajouter(conv, {"type": "event", "from": bot, "replyToId": ident, "text": "",
                                     "name": "fin"}, 5.2)

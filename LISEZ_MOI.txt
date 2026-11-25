@@ -85,6 +85,9 @@ Discuter avec l'agent AMT (barre latérale > Assistant > Discuter)
   (barre latérale) en ouvre une autre.
   Agent injoignable (secret absent ou refusé, réseau, délai dépassé) : message clair et bouton discret
   « Voir la réponse calculée localement » (secours : calcul sur le jeu de données nettoyé, voir ci-dessous).
+  Bouton « Exporter » (en haut de la discussion) : discussion (Markdown), rapport Excel, rapport PDF, données
+  nettoyées (CSV). Fichiers joints par l'agent : bouton à leur nom sous la réponse (téléchargement direct si le
+  fichier est intégré, lien https ouvert dans un nouvel onglet sinon ; 20 Mo au plus ; cartes non affichées).
   Chaque échange est journalisé (page Traçabilité, Excel, PDF) avec sa source et l'identifiant de conversation.
   Test sans agent réel : python faux_copilot.py   puis
     COPILOT_DIRECTLINE_SECRET=faux-secret-de-test COPILOT_DIRECTLINE_URL=http://localhost:8765 streamlit run app.py
@@ -113,7 +116,7 @@ Apparence
 Tests
   python test_questions.py
   (autres fichiers : AMT_FICHIER_ORGA=... AMT_FICHIER_PIEGE=... python test_questions.py)
-  Sans le fichier de la variante piégée, ses 35 tests sont ignorés ; les 30 autres doivent passer.
+  Sans le fichier de la variante piégée, ses 35 tests sont ignorés ; les 32 autres doivent passer.
 
 Chiffres de contrôle
   Fichier des organisateurs : total nettoyé 110 229, brut 110 266, 1 anomalie (DAK-SIM, arrivées, 14/08/2025, 290) ;

@@ -355,6 +355,14 @@ class AgentCopilotStudio(unittest.TestCase):
         envoi = [a for a in recus if a.get("text") == "Question seule"][0]
         self.assertEqual(set(envoi), {"type", "from", "locale", "text"})
 
+    def test_fichiers_joints(self):
+        import copilot
+        conv = copilot.ouvrir_conversation(self.url)
+        r = copilot.demander(conv, "Exporte un fichier", intervalle=0.2, silence_fin=0.8)
+        self.assertEqual([f["nom"] for f in r.fichiers], ["export_agent.csv", "rapport_agent.pdf"])
+        self.assertTrue(r.fichiers[0]["url"].startswith("data:text/csv;base64,"))
+        self.assertEqual(r.pieces_jointes, ["application/vnd.microsoft.card.adaptive"])  # carte : non téléchargeable
+
     def test_erreurs_claires(self):
         import copilot
         conv = copilot.ouvrir_conversation(self.url)
@@ -531,6 +539,20 @@ class InterfaceAgentUnique(unittest.TestCase):
         at.chat_input[0].set_value("Total de Dakar en janvier 2025 ?").run()
         self.assertIn("Réponse du faux serveur de test", at.session_state.chat[-1]["content"])
         self.assertNotIn("faux-secret-de-test", " ".join(str(e) for e in at.main))
+
+    def test_export_et_fichiers_dans_le_chat(self):
+        os.environ["COPILOT_DIRECTLINE_SECRET"] = "faux-secret-de-test"
+        os.environ["COPILOT_DIRECTLINE_URL"] = f"http://127.0.0.1:{self.serveur.server_address[1]}"
+        at = self.app()
+        self.aller(at, "discuter")
+        at.chat_input[0].set_value("Envoie-moi un fichier").run()
+        self.assertFalse(at.exception)
+        boutons = [e.proto.label for e in at.get("download_button")]
+        for libelle in ("Discussion (Markdown)", "Rapport Excel", "Rapport PDF", "Données nettoyées (CSV)",
+                        "export_agent.csv"):
+            self.assertIn(libelle, boutons)
+        liens = [e.proto.label for e in at.get("link_button")]
+        self.assertIn("rapport_agent.pdf", liens)
 
     def test_agent_injoignable_secours_local(self):
         at = self.app()  # pas de secret : agent non configuré

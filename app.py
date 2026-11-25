@@ -1,3 +1,4 @@
+import base64
 import io
 import os
 import re
@@ -383,7 +384,7 @@ def interroger_agent(attente, sur_etat=None):
         r = copilot.demander(conv, question, sur_etat=sur_etat)
         texte = "\n\n".join(r.textes)
         st.session_state.chat.append({"role": "assistant", "content": texte, "pieces": r.pieces_jointes,
-                                      "incomplete": not r.complete})
+                                      "fichiers": r.fichiers, "incomplete": not r.complete})
         traces.ajouter(traces.JOURNAL, {**entree, "type_reponse": "reponse_agent" if r.complete
                                         else "reponse_agent_incomplete", "reponse": texte,
                                         "conversation_agent": r.conversation_id, "duree_s": r.duree})
@@ -441,6 +442,70 @@ def effet_frappe(texte):
         time.sleep(0.008)
 
 
+TAILLE_MAX_JOINT = 20 * 1024 * 1024
+
+
+def fichier_data(url):
+    """Contenu d'une adresse data: (base64), ou None si elle est invalide ou trop grande."""
+    entete_d, _, donnees = url.partition(",")
+    if not entete_d.endswith(";base64") or len(donnees) > TAILLE_MAX_JOINT * 4 // 3 + 4:
+        return None
+    try:
+        return base64.b64decode(donnees, validate=True)
+    except ValueError:
+        return None
+
+
+def afficher_fichiers(i, fichiers):
+    """Fichiers envoyés par l'agent : lien https ouvert dans un nouvel onglet, ou téléchargement direct."""
+    with st.container(horizontal=True):
+        for k, f in enumerate(fichiers):
+            nom_j = Path(f["nom"]).name or "fichier_agent"
+            if f["url"].startswith("https://"):
+                st.link_button(nom_j, f["url"], icon=":material/download:")
+            else:
+                contenu = fichier_data(f["url"])
+                if contenu is None:
+                    st.caption(f"{nom_j} : fichier joint illisible ou trop volumineux.")
+                else:
+                    st.download_button(nom_j, contenu, nom_j, f["type"], key=f"joint_{i}_{k}",
+                                       icon=":material/download:", on_click="ignore")
+
+
+def discussion_markdown():
+    lignes = ["# Discussion avec l'agent AMT", "",
+              f"Jeu de données : {os.path.basename(nom) if nom else 'aucun'}",
+              f"Exportée le {pd.Timestamp.now():%d/%m/%Y à %H:%M}", ""]
+    for msg in st.session_state.chat:
+        if msg["role"] == "user":
+            lignes += ["## Question", "", msg["content"], ""]
+        else:
+            source = "Réponse calculée localement (secours)" if msg.get("secours") else "Réponse de l'agent"
+            lignes += [f"### {source}", "", msg["content"], ""]
+            if msg.get("fichiers"):
+                lignes += ["Fichiers joints : " + ", ".join(Path(f["nom"]).name for f in msg["fichiers"]), ""]
+    lignes += ["---", MENTION]
+    return "\n".join(lignes)
+
+
+def menu_export():
+    with st.popover("Exporter", icon=":material/download:"):
+        st.download_button("Discussion (Markdown)", discussion_markdown(), "discussion_agent_amt.md",
+                           "text/markdown", icon=":material/chat:", width="stretch", on_click="ignore",
+                           disabled=not st.session_state.chat)
+        if df is not None:
+            st.download_button("Rapport Excel", excel_bytes, "amt_analyse_trafic.xlsx",
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               icon=":material/table_view:", width="stretch", on_click="ignore")
+            st.download_button("Rapport PDF", pdf_bytes, "amt_rapport_trafic.pdf", "application/pdf",
+                               icon=":material/picture_as_pdf:", width="stretch", on_click="ignore")
+            st.download_button("Données nettoyées (CSV)",
+                               lambda: df.drop(columns=["statut"]).to_csv(index=False).encode("utf-8-sig"),
+                               "trafic_nettoye.csv", "text/csv", icon=":material/dataset:", width="stretch",
+                               on_click="ignore")
+        st.caption("Les rapports portent sur tout le fichier, sans les filtres.")
+
+
 def page_chat():
     st.html(STYLE_CHAT)
     if not st.session_state.chat:
@@ -451,7 +516,9 @@ def page_chat():
                        "envoyée ; ses réponses s'affichent telles quelles. Validation de l'expert métier requise.")
     else:
         with st.container(key="chat_fil"):
-            st.subheader("Discuter avec l'agent AMT")
+            with st.container(horizontal=True, vertical_alignment="center"):
+                st.subheader("Discuter avec l'agent AMT", width="stretch")
+                menu_export()
             dernier = len(st.session_state.chat) - 1
             for i, msg in enumerate(st.session_state.chat):
                 if msg["role"] == "user":
@@ -468,6 +535,8 @@ def page_chat():
                         if msg.get("incomplete"):
                             st.caption(":material/hourglass_bottom: Réponse peut-être incomplète : délai de "
                                        f"{copilot.DELAI_MAX} s atteint alors que l'agent répondait encore.")
+                        if msg.get("fichiers"):
+                            afficher_fichiers(i, msg["fichiers"])
                         if msg.get("pieces"):
                             st.caption("L'agent a aussi envoyé : " + ", ".join(msg["pieces"]) + " (non affiché ici).")
                         if msg.get("secours"):

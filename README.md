@@ -135,6 +135,15 @@ La réponse est considérée comme complète dans l'un de ces deux cas :
 
 L'agent garde le contexte d'une question à l'autre. Le bouton « Nouvelle conversation » ouvre une nouvelle conversation.
 
+Le bouton **Exporter**, en haut de la discussion, télécharge :
+
+- la discussion (Markdown) ;
+- le rapport Excel ;
+- le rapport PDF ;
+- les données nettoyées (CSV).
+
+Quand l'agent joint un fichier à sa réponse, un bouton à son nom apparaît sous la réponse. Un fichier intégré à la réponse se télécharge directement. Un lien https s'ouvre dans un nouvel onglet. Les cartes adaptatives ne sont pas affichées.
+
 Si l'agent est injoignable, un bouton discret **« Voir la réponse calculée localement »** affiche une réponse calculée sur le jeu de données, sans Internet. Chaque échange est enregistré dans la page Traçabilité.
 
 ### Tester sans l'agent réel
@@ -153,7 +162,7 @@ AMT_DEFAULT_FILE=donnees/DONNEES_03_ATM_ANALYSE_TRAFIC.xlsx .venv/bin/streamlit 
 .venv/bin/python test_questions.py
 ```
 
-La suite comprend 65 tests d'acceptation. Les 35 tests de la variante piégée ne tournent que si on fournit ce fichier, qui n'est pas dans le dépôt : `AMT_FICHIER_PIEGE=chemin/variante.csv .venv/bin/python test_questions.py`. Sans lui, ils sont ignorés et les 30 autres doivent passer.
+La suite comprend 67 tests d'acceptation. Les 35 tests de la variante piégée ne tournent que si on fournit ce fichier, qui n'est pas dans le dépôt : `AMT_FICHIER_PIEGE=chemin/variante.csv .venv/bin/python test_questions.py`. Sans lui, ils sont ignorés et les 32 autres doivent passer.
 
 Les tests couvrent :
 

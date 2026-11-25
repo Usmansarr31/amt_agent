@@ -70,6 +70,17 @@ class ReponseAgent:
     conversation_id: str
     duree: float
     complete: bool = True      # False : délai maximal atteint alors que l'agent travaillait encore
+    fichiers: list = field(default_factory=list)  # fichiers joints : {"nom", "type", "url"} (https ou data:)
+
+
+def _fichier_joint(pj):
+    """Pièce jointe téléchargeable (adresse https:// ou data:), sinon None (carte, contenu inconnu).
+    Rien n'est téléchargé ici : l'adresse est seulement transmise à l'interface, telle quelle."""
+    url = pj.get("contentUrl") or ""
+    if not (url.startswith("https://") or url.startswith("data:")):
+        return None
+    return {"nom": pj.get("name") or "fichier_agent", "type": pj.get("contentType") or "application/octet-stream",
+            "url": url}
 
 
 def _hote_local(url):
@@ -229,6 +240,7 @@ def demander(conv, question, delai_max=DELAI_MAX, intervalle=INTERVALLE, silence
     except DelaiReseau:
         pass  # l'envoi a pu aboutir alors que l'accusé de réception tarde : on lit les activités
     textes, pieces, derniere_activite, ecrit_encore, fin_signalee, echecs = [], [], None, False, False, 0
+    fichiers = []
     while True:
         params = f"?watermark={urllib.parse.quote(conv.watermark)}" if conv.watermark else ""
         try:
@@ -258,15 +270,20 @@ def demander(conv, question, delai_max=DELAI_MAX, intervalle=INTERVALLE, silence
                 if a.get("text"):
                     textes.append(a["text"])
                 for pj in a.get("attachments") or []:
-                    pieces.append(pj.get("contentType", "inconnu"))
-            elif typ in ("event", "endOfConversation") and (textes or pieces):
+                    f = _fichier_joint(pj)
+                    if f:
+                        fichiers.append(f)
+                    else:
+                        pieces.append(pj.get("contentType", "inconnu"))
+            elif typ in ("event", "endOfConversation") and (textes or pieces or fichiers):
                 fin_signalee, ecrit_encore = True, False  # message de l'agent puis « event » : réponse complète
-        if textes or pieces:
+        if textes or pieces or fichiers:
             if fin_signalee or (not ecrit_encore and time.time() - derniere_activite >= silence_fin):
-                return ReponseAgent(textes, pieces, conv.id, round(time.time() - debut, 1))
+                return ReponseAgent(textes, pieces, conv.id, round(time.time() - debut, 1), fichiers=fichiers)
         if time.time() - debut >= delai_max:
-            if textes or pieces:  # réponse partielle reçue : on la montre, signalée comme incomplète
-                return ReponseAgent(textes, pieces, conv.id, round(time.time() - debut, 1), complete=False)
+            if textes or pieces or fichiers:  # réponse partielle reçue : on la montre, signalée comme incomplète
+                return ReponseAgent(textes, pieces, conv.id, round(time.time() - debut, 1), complete=False,
+                                    fichiers=fichiers)
             etat = " (il indiquait encore être en train de répondre)" if ecrit_encore else ""
             raise ErreurAgent(f"Délai dépassé : l'agent n'a pas répondu en {delai_max:g} secondes{etat}. "
                               "Le service est joignable : l'agent est peut-être surchargé, réessayez.")
