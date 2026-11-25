@@ -37,12 +37,44 @@ L'application réunit dans une seule interface :
 
 Il faut Python 3.11 ou plus récent.
 
+### Linux / macOS
+
 ```bash
 git clone https://github.com/Usmansarr31/amt_agent.git
 cd amt_agent
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
+
+Pour activer l'environnement virtuel dans un terminal : `source .venv/bin/activate`.
+
+### Windows
+
+Installez Python depuis [python.org](https://www.python.org/downloads/) en cochant **« Add python.exe to PATH »**. Ensuite, dans l'invite de commandes (`cmd`) ou PowerShell :
+
+```bat
+git clone https://github.com/Usmansarr31/amt_agent.git
+cd amt_agent
+py -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+```
+
+Pour activer l'environnement virtuel :
+
+| Terminal | Commande |
+|---|---|
+| Invite de commandes (`cmd`) | `.venv\Scripts\activate.bat` |
+| PowerShell | `.venv\Scripts\Activate.ps1` |
+
+Le nom `(.venv)` apparaît alors au début de la ligne. Pour quitter l'environnement, tapez `deactivate`.
+
+Si PowerShell refuse d'exécuter `Activate.ps1` (« l'exécution de scripts est désactivée sur ce système »), autorisez les scripts pour votre utilisateur, une seule fois :
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+Vous n'avez pas besoin d'activer l'environnement pour utiliser `lancer.bat` : le script le trouve tout seul.
 
 ## Lancement
 
@@ -62,6 +94,14 @@ Pour lancer sans script :
 ```bash
 read -rs COPILOT_DIRECTLINE_SECRET && export COPILOT_DIRECTLINE_SECRET   # coller le secret, puis Entrée
 AMT_DEFAULT_FILE=donnees/DONNEES_03_ATM_ANALYSE_TRAFIC.xlsx .venv/bin/streamlit run app.py
+```
+
+Sous Windows, dans PowerShell, avec l'environnement activé :
+
+```powershell
+$env:COPILOT_DIRECTLINE_SECRET = Read-Host "Secret" -MaskInput   # PowerShell 7 ; sinon utiliser lancer.bat
+$env:AMT_DEFAULT_FILE = "donnees\DONNEES_03_ATM_ANALYSE_TRAFIC.xlsx"
+streamlit run app.py
 ```
 
 | Variable | Rôle |
