@@ -15,7 +15,9 @@ de questions posées dans la conversation. Questions spéciales pour les tests :
   « sans event »  -> réponse sans activité « event » finale (fin détectée par le silence) ;
   « silence »     -> aucune réponse ;  « reflechit » -> « typing » toutes les secondes sans jamais répondre ;
   « panne »       -> erreur HTTP 500 à l'envoi.
-  « fichier »     -> second message avec un CSV joint (data:), un lien PDF (https) et une carte adaptative.
+  « tardif »      -> réponse à 6 s (après un délai d'attente court : test de « Récupérer la réponse »).
+  « fichier »     -> second message avec liens sandbox: dans le texte, un CSV intégré
+                     (content), un CSV data:, un PDF hébergé comme Direct Line (jeton t= périmé) et une carte.
 GET /_recus renvoie les activités reçues (pour vérifier que seule la question est envoyée).
 """
 import base64
@@ -65,6 +67,15 @@ class Gestionnaire(BaseHTTPRequestHandler):
         if u.path == "/_recus":
             with VERROU:
                 return self._json(200, RECUS)
+        if u.path.startswith("/attachments/"):  # comme Direct Line : ?t= périmé refusé, jeton en en-tête accepté
+            if "t=perime" in u.query or not self._autorise():
+                return self._json(400, {"error": {"code": "BadArgument", "message": "Invalid token or secret"}})
+            brut = b"%PDF-1.4 faux rapport de test"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/pdf")
+            self.send_header("Content-Length", str(len(brut)))
+            self.end_headers()
+            return self.wfile.write(brut)
         m = re.fullmatch(r"/v3/directline/conversations/([^/]+)/activities", u.path)
         if m:
             if not self._autorise():
@@ -112,6 +123,12 @@ class Gestionnaire(BaseHTTPRequestHandler):
             ident = "act-" + uuid.uuid4().hex[:8]
             _ajouter(conv, {**corps, "id": ident}, 0)  # écho de l'activité de l'utilisateur, comme Direct Line
             bot = {"id": "agent", "name": "Agent AMT (faux serveur)"}
+            if "tardif" in texte.lower():  # réponse après le délai d'attente du client (tests de récupération)
+                _ajouter(conv, {"type": "typing", "from": bot, "replyToId": ident}, 0.5)
+                _ajouter(conv, {"type": "message", "from": bot, "replyToId": ident,
+                                "text": f"**Réponse tardive du faux serveur** à : « {texte} »"}, 6.0)
+                _ajouter(conv, {"type": "event", "from": bot, "replyToId": ident, "text": "", "name": "fin"}, 6.2)
+                return self._json(200, {"id": ident})
             if "lent" in texte.lower():
                 with VERROU:
                     CONVERSATIONS[conv]["lent_jusqu_a"] = time.time() + 4
@@ -136,13 +153,19 @@ class Gestionnaire(BaseHTTPRequestHandler):
                 _ajouter(conv, {"type": "typing", "from": bot, "replyToId": ident}, 2.0)
                 second = {"type": "message", "from": bot, "replyToId": ident,
                           "text": f"Question n°{n} dans cette conversation ({conv})."}
-                if "fichier" in texte.lower():  # pièces jointes, comme un agent qui génère un export
+                if "fichier" in texte.lower():  # comme l'agent réel : liens sandbox: dans le texte + pièces jointes
+                    second["text"] = ("Exports : [Rapport Excel](sandbox:/app/rapport_amt.xlsx), "
+                                      "[Synthèse PDF](sandbox:/app/Synthese_trafic.pdf) et "
+                                      "sandbox:/app/Journal_AMT_2026-11-25.csv.")
                     csv_b64 = base64.b64encode("aerodrome;total\nDAK-SIM;2139\n".encode()).decode()
                     second["attachments"] = [
+                        {"contentType": "text/csv", "name": "Journal_AMT_2026-11-25.csv",  # contenu intégré
+                         "content": "horodatage;question\n2026-11-25 10:00;Total Dakar\n"},
                         {"contentType": "text/csv", "name": "export_agent.csv",
                          "contentUrl": f"data:text/csv;base64,{csv_b64}"},
-                        {"contentType": "application/pdf", "name": "rapport_agent.pdf",
-                         "contentUrl": "https://exemple.invalid/rapport_agent.pdf"},
+                        {"contentType": "application/pdf", "name": "Synthese_trafic.pdf",  # comme Direct Line :
+                         "contentUrl": f"http://{self.headers.get('Host')}/attachments/{conv}/0/"  # jeton t= périmé
+                                       "Synthese_trafic.pdf?t=perime"},
                         {"contentType": "application/vnd.microsoft.card.adaptive", "content": {}}]
                 _ajouter(conv, second, 5.0)
                 if "sans event" not in texte.lower():

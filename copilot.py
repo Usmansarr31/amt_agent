@@ -15,6 +15,8 @@ une trace ou un message d'erreur, et jamais affiché.
 Seule la question de l'utilisateur est envoyée : aucune donnée du fichier ne quitte l'application.
 Toutes les erreurs sont converties en ErreurAgent, avec un message clair en français.
 """
+import base64
+import binascii
 import json
 import os
 import re
@@ -25,10 +27,19 @@ import urllib.parse
 import urllib.request
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 
 DIRECTLINE_DEFAUT = "https://directline.botframework.com"
 VAR_SECRET = "COPILOT_DIRECTLINE_SECRET"
-DELAI_MAX = 90           # secondes : délai maximal pour une réponse complète (envoi + lectures)
+def _delai_max_env(defaut=180, mini=30, maxi=600):
+    """Délai d'attente de la réponse : variable AMT_AGENT_DELAI (secondes, entre 30 et 600), sinon 180 s."""
+    try:
+        return min(max(int(os.environ.get("AMT_AGENT_DELAI", defaut)), mini), maxi)
+    except ValueError:
+        return defaut
+
+
+DELAI_MAX = _delai_max_env()  # secondes : délai maximal pour une réponse complète (envoi + lectures)
 INTERVALLE = 2.0         # secondes entre deux lectures des activités (avec le watermark)
 SILENCE_FIN = 5.0        # secondes sans nouvelle activité après la réponse de l'agent : réponse complète
 DELAI_REQUETE = 30       # secondes : jeton et ouverture de conversation
@@ -53,6 +64,15 @@ class ErreurServeur(ErreurAgent):
     """Erreur HTTP 5xx : peut être passagère."""
 
 
+class ReponseEnRetard(ErreurAgent):
+    """Délai dépassé sans réponse : l'agent travaille peut-être encore. La réponse pourra être récupérée plus
+    tard dans la même conversation avec attendre_reponse(conv, id_envoi)."""
+
+    def __init__(self, message, id_envoi):
+        super().__init__(message)
+        self.id_envoi = id_envoi
+
+
 @dataclass
 class Conversation:
     base: str                  # .../v3/directline
@@ -70,17 +90,47 @@ class ReponseAgent:
     conversation_id: str
     duree: float
     complete: bool = True      # False : délai maximal atteint alors que l'agent travaillait encore
-    fichiers: list = field(default_factory=list)  # fichiers joints : {"nom", "type", "url"} (https ou data:)
+    fichiers: list = field(default_factory=list)  # pièces jointes brutes : {"nom", "type", "url"|"contenu"}
+    id_envoi: str | None = None  # identifiant de la question : sert à récupérer la suite d'une réponse incomplète
+
+
+MENTION_INDISPONIBLE = "fichier non disponible depuis cette interface"
+TYPES_TEXTE = ("text/", "application/json", "application/xml", "application/csv")
+
+
+def nom_sur(nom):
+    """Nom de fichier sans chemin ni caractère de contrôle (jamais utilisé tel quel pour écrire sur disque)."""
+    nom = Path(str(nom or "").replace("\\", "/")).name
+    nom = re.sub(r"[\x00-\x1f<>:\"|?*]", "_", nom).strip(" .")
+    return nom[:150] or "fichier_agent"
+
+
+def _contenu_inline(contenu, type_):
+    """Champ « content » d'une pièce jointe : texte (CSV, JSON...), base64 ou objet JSON -> octets."""
+    if isinstance(contenu, (dict, list)):
+        return json.dumps(contenu, ensure_ascii=False, indent=2).encode("utf-8")
+    if not isinstance(contenu, str):
+        return None
+    if not type_.startswith(TYPES_TEXTE):
+        try:
+            return base64.b64decode(contenu, validate=True)
+        except (binascii.Error, ValueError):
+            pass
+    return contenu.encode("utf-8")
 
 
 def _fichier_joint(pj):
-    """Pièce jointe téléchargeable (adresse https:// ou data:), sinon None (carte, contenu inconnu).
-    Rien n'est téléchargé ici : l'adresse est seulement transmise à l'interface, telle quelle."""
-    url = pj.get("contentUrl") or ""
-    if not (url.startswith("https://") or url.startswith("data:")):
+    """Pièce jointe d'une activité de l'agent : {"nom", "type", "url"} ou {"nom", "type", "contenu"},
+    ou None pour une carte (affichage interactif, pas un fichier). Rien n'est téléchargé ici."""
+    type_ = pj.get("contentType") or "application/octet-stream"
+    if type_.startswith("application/vnd.microsoft.card."):
         return None
-    return {"nom": pj.get("name") or "fichier_agent", "type": pj.get("contentType") or "application/octet-stream",
-            "url": url}
+    f = {"nom": nom_sur(pj.get("name")), "type": type_}
+    url = pj.get("contentUrl") or ""
+    if url:
+        return {**f, "url": url}
+    contenu = _contenu_inline(pj.get("content"), type_)
+    return {**f, "contenu": contenu} if contenu is not None else None
 
 
 def _hote_local(url):
@@ -146,6 +196,117 @@ def _requete(methode, url, jeton=None, corps=None, refus=None, delai=DELAI_REQUE
         return json.loads(brut)
     except ValueError:
         raise ErreurAgent("Réponse illisible du service de l'agent (JSON attendu).") from None
+
+
+TAILLE_MAX_FICHIER = 20 * 1024 * 1024   # octets : fichier joint par l'agent
+
+
+def fichier_directline(conv, url):
+    """Vrai si l'adresse est une pièce jointe hébergée par Direct Line (même domaine que la conversation ou
+    *.botframework.com) : elle se télécharge avec le jeton de la conversation, jamais ouverte dans le navigateur."""
+    u, b = urllib.parse.urlsplit(url), urllib.parse.urlsplit(conv.base)
+    if u.scheme != b.scheme or u.scheme not in ("https", "http"):
+        return False
+    if u.scheme == "http" and not _hote_local(url):
+        return False
+    return u.netloc == b.netloc or (u.scheme == "https" and (u.hostname or "").endswith(".botframework.com"))
+
+
+def _donnees_data(url, taille_max):
+    entete, _, donnees = url.partition(",")
+    if len(donnees) > taille_max * 4 // 3 + 4:
+        raise ErreurAgent(f"Fichier joint trop volumineux (plus de {taille_max // (1024 * 1024)} Mo).")
+    try:
+        if entete.endswith(";base64"):
+            return base64.b64decode(donnees, validate=True)
+        return urllib.parse.unquote_to_bytes(donnees)
+    except (binascii.Error, ValueError):
+        raise ErreurAgent("Fichier joint illisible.") from None
+
+
+def telecharger_fichier(conv, url, taille_max=TAILLE_MAX_FICHIER, delai=DELAI_LECTURE):
+    """Contenu d'une pièce jointe désignée par une adresse :
+    - data: décodée sur place ;
+    - Direct Line : téléchargée avec le jeton de la conversation (en-tête Authorization) ; si le jeton contenu
+      dans l'adresse (?t=...) est refusé, nouvel essai sans lui ;
+    - autre https:// : téléchargée sans aucun jeton.
+    Les messages d'erreur ne contiennent jamais l'adresse (elle peut porter un jeton) ni le jeton."""
+    if url.startswith("data:"):
+        return _donnees_data(url, taille_max)
+    if url.startswith("sandbox:"):
+        raise ErreurAgent(MENTION_INDISPONIBLE.capitalize() + " (fichier resté dans l'environnement de l'agent).")
+    avec_jeton = fichier_directline(conv, url)
+    if not avec_jeton and not url.startswith("https://"):
+        raise ErreurAgent("Fichier joint refusé : adresse non sécurisée (https:// attendu).")
+    u = urllib.parse.urlsplit(url)
+    sans_t = urllib.parse.urlunsplit(u._replace(query=urllib.parse.urlencode(
+        [(k, v) for k, v in urllib.parse.parse_qsl(u.query) if k != "t"])))
+    code = None
+    for essai in dict.fromkeys([url, sans_t] if avec_jeton else [url]):
+        entetes = {"Authorization": f"Bearer {conv.jeton}"} if avec_jeton else {}
+        req = urllib.request.Request(essai, headers=entetes)
+        try:
+            with urllib.request.urlopen(req, timeout=delai) as r:
+                contenu = r.read(taille_max + 1)
+        except urllib.error.HTTPError as e:
+            e.close()
+            code = e.code
+            if e.code in (400, 401, 403):  # Direct Line : « Invalid token or secret » si le jeton t= est périmé
+                continue
+            break
+        except (TimeoutError, socket.timeout):
+            raise DelaiReseau("Le fichier joint n'a pas pu être téléchargé à temps.") from None
+        except (urllib.error.URLError, OSError):
+            raise ErreurReseau("Impossible de télécharger le fichier joint (réseau).") from None
+        if len(contenu) > taille_max:
+            raise ErreurAgent(f"Fichier joint trop volumineux (plus de {taille_max // (1024 * 1024)} Mo).")
+        return contenu
+    raise ErreurAgent(f"Le fichier joint a été refusé par le serveur qui l'héberge (HTTP {code}).")
+
+
+def recuperer_fichiers(conv, fichiers, taille_max=TAILLE_MAX_FICHIER):
+    """Récupère tout de suite (le jeton expire) chaque pièce jointe : {"nom", "type", "contenu"} ou
+    {"nom", "type", "erreur"}. Aucune adresse n'est conservée : elle peut porter un jeton."""
+    resultat = []
+    for f in fichiers:
+        base_f = {"nom": nom_sur(f.get("nom")), "type": f.get("type") or "application/octet-stream"}
+        try:
+            contenu = f["contenu"] if f.get("contenu") is not None else telecharger_fichier(conv, f["url"], taille_max)
+            if len(contenu) > taille_max:
+                raise ErreurAgent(f"Fichier joint trop volumineux (plus de {taille_max // (1024 * 1024)} Mo).")
+            resultat.append({**base_f, "contenu": contenu})
+        except ErreurAgent as ex:
+            resultat.append({**base_f, "erreur": str(ex)})
+    return resultat
+
+
+_LIEN_MD_SANDBOX = re.compile(r"\[([^\]]*)\]\(\s*<?(sandbox:[^)>\s]*)>?(?:\s+\"[^\"]*\")?\s*\)")
+_LIEN_SANDBOX = re.compile(r"sandbox:[^\s)\]>\"'`]+")
+
+
+def remplacer_liens_sandbox(texte, noms_joints):
+    """Remplace les liens sandbox:/... (fichiers restés dans l'environnement de l'agent, inaccessibles au
+    navigateur) par le nom de la pièce jointe correspondante en texte simple, sinon par la mention
+    « fichier non disponible depuis cette interface ». Le reste du texte n'est pas modifié."""
+    noms = {n.lower(): n for n in noms_joints}
+
+    def cible(lien):
+        fichier = urllib.parse.unquote(lien.rstrip(".,;:!?")).rsplit("/", 1)[-1].lower()
+        return noms.get(fichier)
+
+    def md(m):
+        nom = cible(m.group(2))
+        if nom:
+            return nom
+        libelle = m.group(1).strip()
+        return f"{libelle} ({MENTION_INDISPONIBLE})" if libelle and "sandbox:" not in libelle else MENTION_INDISPONIBLE
+
+    def brut(m):
+        lien = m.group(0)
+        fin = lien[len(lien.rstrip(".,;:!?")):]  # ponctuation finale gardée dans le texte
+        return (cible(lien) or MENTION_INDISPONIBLE) + fin
+
+    return _LIEN_SANDBOX.sub(brut, _LIEN_MD_SANDBOX.sub(md, texte))
 
 
 def adresse_directline(token_url, directline_url=None):
@@ -219,15 +380,16 @@ def _rafraichir(conv):
         conv.obtenu_le = time.time()
 
 
-def demander(conv, question, delai_max=DELAI_MAX, intervalle=INTERVALLE, silence_fin=SILENCE_FIN,
-             delai_lecture=DELAI_LECTURE, sur_etat=None):
+def demander(conv, question, delai_max=None, intervalle=INTERVALLE, silence_fin=SILENCE_FIN,
+             delai_lecture=DELAI_LECTURE, sur_etat=None, sur_progression=None):
     """Envoie la question (et rien d'autre) puis lit les activités (watermark) toutes les `intervalle` secondes,
     pendant `delai_max` secondes au plus.
 
     Réponse complète : un message de l'agent suivi d'une activité « event » ; ou, une fois un message reçu,
     `silence_fin` secondes sans nouvelle activité (et l'agent n'est pas en train d'écrire : « typing »).
     Un délai de requête dépassé n'est pas une erreur : l'agent peut être lent, on continue de lire.
-    Seuls des échecs réseau réels et répétés donnent « Impossible de joindre le service »."""
+    Seuls des échecs réseau réels et répétés donnent « Impossible de joindre le service ».
+    Délai dépassé sans réponse : ReponseEnRetard (la réponse reste récupérable par attendre_reponse)."""
     debut = time.time()
     _rafraichir(conv)
     url_act = f"{conv.base}/conversations/{urllib.parse.quote(conv.id)}/activities"
@@ -239,6 +401,19 @@ def demander(conv, question, delai_max=DELAI_MAX, intervalle=INTERVALLE, silence
         id_envoi = envoi.get("id")
     except DelaiReseau:
         pass  # l'envoi a pu aboutir alors que l'accusé de réception tarde : on lit les activités
+    return attendre_reponse(conv, id_envoi, delai_max, intervalle, silence_fin, delai_lecture, sur_etat,
+                            sur_progression, debut)
+
+
+def attendre_reponse(conv, id_envoi, delai_max=None, intervalle=INTERVALLE, silence_fin=SILENCE_FIN,
+                     delai_lecture=DELAI_LECTURE, sur_etat=None, sur_progression=None, debut=None):
+    """Lit les activités de la conversation jusqu'à la réponse complète de l'agent à la question `id_envoi`.
+    Sert aussi à récupérer une réponse arrivée après le délai : la lecture reprend au watermark, rien n'est
+    renvoyé à l'agent. sur_progression(secondes) est appelé à chaque lecture (affichage du temps d'attente)."""
+    delai_max = DELAI_MAX if delai_max is None else delai_max
+    debut = time.time() if debut is None else debut
+    _rafraichir(conv)
+    url_act = f"{conv.base}/conversations/{urllib.parse.quote(conv.id)}/activities"
     textes, pieces, derniere_activite, ecrit_encore, fin_signalee, echecs = [], [], None, False, False, 0
     fichiers = []
     while True:
@@ -279,14 +454,17 @@ def demander(conv, question, delai_max=DELAI_MAX, intervalle=INTERVALLE, silence
                 fin_signalee, ecrit_encore = True, False  # message de l'agent puis « event » : réponse complète
         if textes or pieces or fichiers:
             if fin_signalee or (not ecrit_encore and time.time() - derniere_activite >= silence_fin):
-                return ReponseAgent(textes, pieces, conv.id, round(time.time() - debut, 1), fichiers=fichiers)
+                return ReponseAgent(textes, pieces, conv.id, round(time.time() - debut, 1), fichiers=fichiers,
+                                    id_envoi=id_envoi)
         if time.time() - debut >= delai_max:
             if textes or pieces or fichiers:  # réponse partielle reçue : on la montre, signalée comme incomplète
                 return ReponseAgent(textes, pieces, conv.id, round(time.time() - debut, 1), complete=False,
-                                    fichiers=fichiers)
+                                    fichiers=fichiers, id_envoi=id_envoi)
             etat = " (il indiquait encore être en train de répondre)" if ecrit_encore else ""
-            raise ErreurAgent(f"Délai dépassé : l'agent n'a pas répondu en {delai_max:g} secondes{etat}. "
-                              "Le service est joignable : l'agent est peut-être surchargé, réessayez.")
+            raise ReponseEnRetard(f"Délai dépassé : l'agent n'a pas répondu en {delai_max:g} secondes{etat}. "
+                                  "Il travaille peut-être encore : sa réponse pourra être récupérée.", id_envoi)
+        if sur_progression:
+            sur_progression(int(time.time() - debut))
         time.sleep(intervalle)
 
 

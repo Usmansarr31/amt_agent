@@ -5,6 +5,8 @@ Fichiers : variables AMT_FICHIER_ORGA et AMT_FICHIER_PIEGE, sinon le dossier don
 """
 import io
 import os
+import shutil
+import time
 import unittest
 from pathlib import Path
 
@@ -359,9 +361,59 @@ class AgentCopilotStudio(unittest.TestCase):
         import copilot
         conv = copilot.ouvrir_conversation(self.url)
         r = copilot.demander(conv, "Exporte un fichier", intervalle=0.2, silence_fin=0.8)
-        self.assertEqual([f["nom"] for f in r.fichiers], ["export_agent.csv", "rapport_agent.pdf"])
-        self.assertTrue(r.fichiers[0]["url"].startswith("data:text/csv;base64,"))
-        self.assertEqual(r.pieces_jointes, ["application/vnd.microsoft.card.adaptive"])  # carte : non téléchargeable
+        self.assertEqual([f["nom"] for f in r.fichiers],
+                         ["Journal_AMT_2026-11-25.csv", "export_agent.csv", "Synthese_trafic.pdf"])
+        self.assertEqual(r.pieces_jointes, ["application/vnd.microsoft.card.adaptive"])  # carte : pas un fichier
+        self.assertTrue(copilot.fichier_directline(conv, r.fichiers[2]["url"]))
+        self.assertFalse(copilot.fichier_directline(conv, "https://exemple.invalid/x?t=1"))  # jamais de jeton ailleurs
+        recus = copilot.recuperer_fichiers(conv, r.fichiers)
+        self.assertEqual(recus[0]["contenu"], b"horodatage;question\n2026-11-25 10:00;Total Dakar\n")  # content
+        self.assertEqual(recus[1]["contenu"], b"aerodrome;total\nDAK-SIM;2139\n")  # data:
+        self.assertTrue(recus[2]["contenu"].startswith(b"%PDF"))  # Direct Line, malgré le jeton t= périmé
+        self.assertTrue(all("url" not in f for f in recus))  # aucune adresse (porteuse de jeton) conservée
+
+    def test_activite_simulee_piece_jointe_et_lien_sandbox(self):
+        import copilot
+        pj = copilot._fichier_joint({"contentType": "text/csv", "name": "Journal_AMT_2026-11-25.csv",
+                                     "content": "a;b\n1;2\n"})
+        self.assertEqual(pj, {"nom": "Journal_AMT_2026-11-25.csv", "type": "text/csv", "contenu": b"a;b\n1;2\n"})
+        self.assertIsNone(copilot._fichier_joint({"contentType": "application/vnd.microsoft.card.hero", "content": {}}))
+        self.assertEqual(copilot._fichier_joint({"contentType": "application/pdf", "name": "../../etc/r.pdf",
+                                                 "content": "JVBERi0="})["contenu"], b"%PDF-")  # base64, nom nettoyé
+        texte = ("Voir [Journal](sandbox:/app/Journal_AMT_2026-11-25.csv), [Rapport Excel](sandbox:/app/r.xlsx) "
+                 "et sandbox:/app/x.pdf.")
+        self.assertEqual(copilot.remplacer_liens_sandbox(texte, ["Journal_AMT_2026-11-25.csv"]),
+                         "Voir Journal_AMT_2026-11-25.csv, Rapport Excel (fichier non disponible depuis cette "
+                         "interface) et fichier non disponible depuis cette interface.")
+        self.assertEqual(copilot.remplacer_liens_sandbox("Aucun lien ici.", []), "Aucun lien ici.")
+        conv = copilot.Conversation(base="https://directline.botframework.com/v3/directline", id="c", jeton="jeton-x")
+        for adresse in ("sandbox:/app/r.xlsx", "http://exemple.com/r.pdf?t=jeton-x"):
+            with self.assertRaises(copilot.ErreurAgent) as ctx:
+                copilot.telecharger_fichier(conv, adresse)
+            self.assertNotIn("jeton-x", str(ctx.exception))
+
+    def test_reponse_en_retard_recuperee(self):
+        import copilot
+        conv = copilot.ouvrir_conversation(self.url)
+        with self.assertRaises(copilot.ReponseEnRetard) as ctx:  # l'agent répond à 4 s, délai de 2 s
+            copilot.demander(conv, "Question tardif", delai_max=2, intervalle=0.2, silence_fin=0.5)
+        self.assertIn("pourra être récupérée", str(ctx.exception))
+        progression = []
+        r = copilot.attendre_reponse(conv, ctx.exception.id_envoi, delai_max=20, intervalle=0.2, silence_fin=0.5,
+                                     sur_progression=progression.append)
+        self.assertIn("Réponse tardive du faux serveur", r.textes[0])  # rien n'a été renvoyé à l'agent
+        self.assertTrue(r.complete)
+        self.assertTrue(progression)
+
+    def test_delai_reglable(self):
+        import copilot
+        from unittest import mock
+        for valeur, attendu in (("240", 240), ("5", 30), ("9999", 600), ("abc", 180)):
+            with mock.patch.dict(os.environ, {"AMT_AGENT_DELAI": valeur}):
+                self.assertEqual(copilot._delai_max_env(), attendu)
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("AMT_AGENT_DELAI", None)
+            self.assertEqual(copilot._delai_max_env(), 180)
 
     def test_erreurs_claires(self):
         import copilot
@@ -512,8 +564,15 @@ class InterfaceAgentUnique(unittest.TestCase):
         at = AppTest.from_file(str(ICI / "app.py"), default_timeout=120).run()
         return at
 
+    def onglet(self, at, libelle):
+        self.aller(at, "tableau")
+        at.session_state["onglet_tableau"] = libelle
+        at.run()
+        self.assertFalse(at.exception)
+
     def aller(self, at, page):
-        at._page_hash = [k for k, v in at._registered_pages.items() if f"'{page}'" in str(v)][0]
+        chemin = "" if page == "tableau" else page  # page par défaut : adresse vide
+        at._page_hash = [k for k, v in at._registered_pages.items() if v["url_pathname"] == chemin][0]
         at.run()
 
     def test_jeu_par_defaut_sans_upload(self):
@@ -525,8 +584,9 @@ class InterfaceAgentUnique(unittest.TestCase):
         self.assertEqual(avance.label, "Avancé")
         self.assertEqual(len(avance.get("file_uploader")), len(at.sidebar.get("file_uploader")))  # seulement là
         titres = [v.get("page_name") for v in at._registered_pages.values()]
-        self.assertIn("Voir l'agent", titres)
-        self.assertNotIn("Agent Copilot Studio", titres)
+        self.assertEqual(titres, ["Tableau de bord", "Journal de l'agent", "Discuter"])  # trois sections
+        self.assertEqual([t.label for t in at.tabs], ["Vue d'ensemble", "Comparaison", "Retards", "Anomalies",
+                                                      "Qualité des données", "Traçabilité", "Exports"])
 
     def test_chat_uniquement_agent(self):
         os.environ["COPILOT_DIRECTLINE_SECRET"] = "faux-secret-de-test"
@@ -541,6 +601,7 @@ class InterfaceAgentUnique(unittest.TestCase):
         self.assertNotIn("faux-secret-de-test", " ".join(str(e) for e in at.main))
 
     def test_export_et_fichiers_dans_le_chat(self):
+        import traces
         os.environ["COPILOT_DIRECTLINE_SECRET"] = "faux-secret-de-test"
         os.environ["COPILOT_DIRECTLINE_URL"] = f"http://127.0.0.1:{self.serveur.server_address[1]}"
         at = self.app()
@@ -548,11 +609,109 @@ class InterfaceAgentUnique(unittest.TestCase):
         at.chat_input[0].set_value("Envoie-moi un fichier").run()
         self.assertFalse(at.exception)
         boutons = [e.proto.label for e in at.get("download_button")]
-        for libelle in ("Discussion (Markdown)", "Rapport Excel", "Rapport PDF", "Données nettoyées (CSV)",
-                        "export_agent.csv"):
+        import rapport
+        nom_xlsx, nom_pdf = rapport.nom_fichiers()
+        menu = {e.proto.label: e.proto.disabled for e in at.get("download_button")}
+        self.assertTrue(menu[f"Rapport Excel ({nom_xlsx})"] and menu[f"Rapport PDF ({nom_pdf})"])  # non validé
+        for libelle in ("Discussion (Markdown)", "Données nettoyées (CSV)",
+                        "Journal_AMT_2026-11-25.csv", "export_agent.csv", "Synthese_trafic.pdf"):
             self.assertIn(libelle, boutons)
-        liens = [e.proto.label for e in at.get("link_button")]
-        self.assertIn("rapport_agent.pdf", liens)
+        affiche = at.session_state.chat[-1]["content"]
+        self.assertNotIn("sandbox:", affiche)
+        self.assertIn("Synthese_trafic.pdf", affiche)  # lien sandbox: remplacé par la pièce jointe
+        self.assertIn("Rapport Excel (fichier non disponible depuis cette interface)", affiche)
+        page = " ".join(str(e) for e in at.main)
+        for interdit in ("t=perime", "faux-jeton", "faux-secret-de-test"):
+            self.assertNotIn(interdit, page)
+        journal = traces.lire(traces.JOURNAL)
+        self.assertIn("sandbox:/app/rapport_amt.xlsx", journal["reponse"].iloc[-1])  # réponse originale tracée
+        refs = journal["fichiers"].iloc[-1]
+        self.assertEqual([f["nom"] for f in refs], ["Journal_AMT_2026-11-25.csv", "export_agent.csv",
+                                                    "Synthese_trafic.pdf"])
+        brut = (Path(self.tmp.name) / "traces" / traces.JOURNAL).read_text()
+        for interdit in ("faux-jeton", "faux-secret-de-test", "t=perime"):
+            self.assertNotIn(interdit, brut)
+        self.onglet(at, "Traçabilité")  # fichiers toujours téléchargeables depuis Traçabilité
+        boutons = [e.proto.label for e in at.get("download_button")]
+        for nom_f in ("Journal_AMT_2026-11-25.csv", "export_agent.csv", "Synthese_trafic.pdf"):
+            self.assertIn(nom_f, boutons)
+        self.assertTrue(traces.lire_fichier(refs[2]).startswith(b"%PDF"))
+        self.onglet(at, "Exports")  # page Exports avec un journal qui contient des fichiers
+        self.assertEqual([b.proto.label for b in at.get("download_button")],
+                         ["Données nettoyées (CSV)"])  # seul l'onglet ouvert est calculé ; rapports verrouillés
+        self.aller(at, "journal")  # Journal de l'agent : une session, ses fichiers téléchargeables
+        self.assertFalse(at.exception)
+        self.assertEqual(at.title[0].value, "Journal de l'agent")
+        self.assertEqual(at.metric[0].value, "1")  # une session
+        boutons = [b.proto.label for b in at.get("download_button")]
+        for libelle in ("Rapport (Markdown)", "Sessions (CSV)", "Synthese_trafic.pdf"):
+            self.assertIn(libelle, boutons)
+        page = " ".join(str(e) for e in at.main)
+        self.assertNotIn("sandbox:", page)
+        for interdit in ("t=perime", "faux-jeton", "faux-secret-de-test"):
+            self.assertNotIn(interdit, page)
+
+    def test_tous_les_onglets_et_journal_sans_session(self):
+        at = self.app()
+        for libelle in ("Vue d'ensemble", "Comparaison", "Retards", "Anomalies", "Qualité des données",
+                        "Traçabilité", "Exports"):
+            self.onglet(at, libelle)
+        self.aller(at, "journal")
+        self.assertIn("Aucun échange", at.info[0].value)
+        self.aller(at, "discuter")  # agent non configuré, puis réponse de secours
+        at.chat_input[0].set_value("Quel est le total de Dakar en janvier 2025 ?").run()
+        [b for b in at.button if b.label == "Voir la réponse calculée localement"][0].click().run()
+        self.aller(at, "journal")
+        self.assertFalse(at.exception)
+        self.assertEqual(at.metric[0].value, "1")  # une seule « session » : sans conversation
+        self.assertEqual(at.metric[1].value, "2")  # erreur de l'agent + réponse de secours
+        self.assertIn("Sans conversation", at.expander[0].label)
+
+    def test_reponse_en_retard_bouton_recuperer(self):
+        import copilot
+        from unittest import mock
+        os.environ["COPILOT_DIRECTLINE_SECRET"] = "faux-secret-de-test"
+        os.environ["COPILOT_DIRECTLINE_URL"] = f"http://127.0.0.1:{self.serveur.server_address[1]}"
+        with mock.patch.object(copilot, "DELAI_MAX", 2):
+            at = self.app()
+            self.aller(at, "discuter")
+            at.chat_input[0].set_value("Question tardif").run()
+            self.assertIn("L'agent n'a pas encore répondu", at.session_state.chat[-1]["content"])
+            bouton = [b for b in at.button if b.label == "Récupérer la réponse"]
+            self.assertEqual(len(bouton), 1)
+        time.sleep(4)  # l'agent finit de répondre pendant que l'utilisateur attend
+        bouton[0].click().run()
+        self.assertFalse(at.exception)
+        self.assertIn("Réponse tardive du faux serveur", at.session_state.chat[-1]["content"])
+        self.assertEqual(sum(m["role"] == "user" for m in at.session_state.chat), 1)  # question non renvoyée
+        self.assertFalse([b for b in at.button if b.label == "Récupérer la réponse"])
+
+    def test_verrou_validation_export(self):
+        import rapport
+        import traces
+        at = self.app()
+        self.onglet(at, "Exports")
+        self.assertIn("Aucun export Excel ou PDF avant validation", at.warning[0].value)
+        self.assertFalse([b for b in at.button if b.label.startswith("Préparer")])
+        at.text_input(key="export_nom").set_value("Awa Diop")
+        [b for b in at.button if b.label == "Valider"][0].click().run()
+        self.assertFalse(at.exception)
+        reg = traces.lire(traces.REGISTRE)
+        self.assertEqual(reg.iloc[-1][["element", "decision", "nom"]].tolist(),
+                         [rapport.ELEMENT_EXPORT, "Valider", "Awa Diop"])
+        self.assertRegex(reg.iloc[-1]["horodatage_utc"], r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$")
+        [b for b in at.button if b.label.startswith("Préparer")][0].click().run()
+        self.assertFalse(at.exception)
+        nom_xlsx, nom_pdf = rapport.nom_fichiers()
+        labels = [b.proto.label for b in at.get("download_button")]
+        self.assertIn(nom_xlsx, labels)
+        self.assertIn(nom_pdf, labels)
+        relecture = [e.label for e in at.expander if e.label.startswith("Relecture")]
+        self.assertEqual(relecture, ["Relecture avant livraison : contrôles réussis"])
+        [b for b in at.button if b.label == "Rejeter"][0].click().run()  # le rejet reverrouille
+        labels = [b.proto.label for b in at.get("download_button")]
+        self.assertNotIn(nom_xlsx, labels)
+        self.assertIn("Aucun export Excel ou PDF avant validation", at.warning[0].value)
 
     def test_agent_injoignable_secours_local(self):
         at = self.app()  # pas de secret : agent non configuré
@@ -563,6 +722,94 @@ class InterfaceAgentUnique(unittest.TestCase):
         self.assertEqual(len(bouton), 1)
         bouton[0].click().run()
         self.assertIn("2 139", at.session_state.chat[-1]["content"])
+
+
+class RapportAMT(unittest.TestCase):
+    """Export au format des livrables de l'agent : chiffres, structure de l'Excel, PDF et relecture."""
+
+    @classmethod
+    def setUpClass(cls):
+        import rapport
+        contenu = Path(ORGA).read_bytes()
+        df, journal, mois, meta = charger(ORGA)
+        cls.A = rapport.analyser(df, journal, mois, meta, "orga.xlsx", "emp", rapport.sources_excel(contenu, ORGA))
+        cls.val = {"nom": "Expert Test", "horodatage_utc": "2026-11-25 10:00:00"}
+        cls.xlsx = rapport.construire_excel(cls.A, validation=cls.val)
+        cls.pdf = rapport.construire_pdf(cls.A, validation=cls.val)
+
+    def test_chiffres(self):
+        A = self.A
+        self.assertEqual(A["total"], 110229)
+        self.assertEqual((A["n"], A["n1"]), (38841, 38711))  # janvier à juin 2026 contre 2025
+        self.assertAlmostEqual(A["variation"], 38841 / 38711 - 1)
+        self.assertEqual(A["mois_variation"], [f"2026-0{k}" for k in range(1, 7)])
+        self.assertEqual(A["principal"], "DAK-SIM")
+        self.assertEqual(A["incomplets"], [("2026-07", 185.0, 1)])
+        self.assertEqual((A["pointe"], A["calme"]), ("2026-03", "2025-11"))
+        self.assertEqual(len(A["pics"]), 1)
+        p = A["pics"][0]
+        self.assertEqual((p["aerodrome"], p["valeur"], p["mediane"], p["score"]), ("DAK-SIM", 290, 37, 34.1))
+        g = A["qualite"]["agregats"]
+        self.assertEqual((g["ecart"], g["doublons"], g["non_explique"]), (41, 41, 0))  # écart expliqué
+        self.assertEqual(g["mois_hors"], [("2026-07", 185.0)])
+
+    def test_structure_excel(self):
+        import io as io_
+        import zipfile
+        from openpyxl import load_workbook
+        wb = load_workbook(io_.BytesIO(self.xlsx))
+        self.assertEqual(wb.sheetnames, ["Tableau de bord", "_calcul", "Trafic journalier",
+                                         "Agrégats mensuels bruts", "Référentiel aérodromes"])
+        self.assertEqual(wb["_calcul"].sheet_state, "hidden")
+        tb, src = wb["Tableau de bord"], wb["Trafic journalier"]
+        self.assertEqual([tb[f"C{r}"].value for r in (4, 5, 6)], ["Tous"] * 3)
+        self.assertEqual(len(tb.data_validations.dataValidation), 3)  # listes déroulantes
+        self.assertIn("SUMIFS(", tb["B9"].value)
+        self.assertEqual(tb["H9"].number_format, "+0.00%;-0.00%")
+        self.assertEqual(len(tb._charts), 7)
+        entetes = [c.value for c in src[1]]
+        for aide in ("Mois", "Mois complet", "Retard × mouvements", "Mouvements avec retard"):
+            self.assertIn(aide, entetes)
+        self.assertIn("Catégorie de vol", entetes)
+        self.assertIsNotNone(src.auto_filter.ref)
+        self.assertEqual(src.cell(row=2, column=entetes.index("Mois") + 1).value, "2025-01")  # texte, en valeur
+        self.assertIsInstance(src.cell(row=2, column=entetes.index("Nombre de mouvements") + 1).value, (int, float))
+        self.assertIn(src.cell(row=2, column=entetes.index("Type de mouvement") + 1).value, ("Arrivée", "Départ"))
+        self.assertFalse(any(ws.protection.sheet for ws in wb.worksheets))
+        with zipfile.ZipFile(io_.BytesIO(self.xlsx)) as z:
+            for n in z.namelist():
+                contenu = z.read(n)
+                self.assertNotIn(b"TEXT(", contenu, n)
+                if b"doughnutChart" in contenu:
+                    self.assertNotIn(b"dLblPos", contenu, n)
+        self.assertIn("dont mois incomplet 2026-07", tb["B12"].value)
+
+    def test_pdf(self):
+        import io as io_
+        import pdfplumber
+        with pdfplumber.open(io_.BytesIO(self.pdf)) as lecteur:
+            textes = [page.extract_text() or "" for page in lecteur.pages]
+        self.assertTrue(3 <= len(textes) <= 7)
+        self.assertIn("110 229", textes[0])
+        self.assertIn("+0,34 %", textes[0])
+        analyse = " ".join(textes[1:-1])
+        for titre in ("1. Synthèse", "2. Volume", "3. Évolution", "4. Comparaison", "5. Aérodromes", "6. Catégories",
+                      "7. Retards", "8. Pics", "9. Qualité", "10. Méthode"):
+            self.assertIn(titre, analyse)
+        for temps in ("Le chiffre.", "Comment le lire.", "Ce qu'il montre.", "Ce qu'il faut vérifier."):
+            self.assertIn(temps, analyse)
+        self.assertIn("Registre de validation", textes[-1])
+        self.assertNotIn("juillet 2026 (12", analyse)  # mois incomplet exclu des comparaisons de retard
+
+    def test_relecture(self):
+        import rapport
+        controles = rapport.relire(self.A, self.xlsx, self.pdf)
+        echecs = [c for c in controles if c[1] is False]
+        self.assertEqual(echecs, [])
+        noms = [c[0] for c in controles]
+        self.assertIn("Aspect visuel (chevauchements, mots coupés)", noms)
+        if shutil.which("soffice"):  # formules réellement recalculées par LibreOffice
+            self.assertIn("Carte « Variation N/N-1 » recalculée = Python", noms)
 
 
 class FormatsXmlPdf(unittest.TestCase):

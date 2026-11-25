@@ -1,26 +1,17 @@
-import base64
 import io
 import os
 import re
 import time
 from pathlib import Path
-from xml.sax.saxutils import escape
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib.units import cm
-from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 import copilot
 import core
 import questions
+import rapport
 import traces
 
 MENTION = "Données fictives - validation humaine requise"
@@ -42,6 +33,14 @@ def registre():
 
 def journal_assistant():
     return traces.lire(traces.JOURNAL, emp)
+
+
+def journal_lisible(ja):
+    """Journal pour l'affichage et les exports : fichiers reçus réduits à leurs noms."""
+    ja = ja.drop(columns=["empreinte"]).copy()
+    ja["fichiers"] = [", ".join(f.get("nom", "") for f in v if isinstance(f, dict)) if isinstance(v, list) else ""
+                      for v in ja["fichiers"]]
+    return ja
 
 
 def etiquette(r):
@@ -70,9 +69,7 @@ def entete():
     c4.metric("Anomalies à valider", int(f["anomalie"].sum()))
 
 
-def page_vue():
-    entete()
-    st.header("Vue d'ensemble", divider="gray")
+def section_vue():
     m = f_graph.groupby(["mois", "aerodrome"])["nombre_mouvements"].sum().reset_index()
     fig = px.line(m, x="mois", y="nombre_mouvements", color="aerodrome", markers=True,
                   labels={"mois": "Mois", "nombre_mouvements": "Mouvements", "aerodrome": "Aérodrome"},
@@ -102,9 +99,7 @@ def page_vue():
         st.caption("Calculé sur la sélection nettoyée (filtres du menu de gauche). La dernière ligne donne la part de chaque valeur.")
 
 
-def page_comparaison():
-    entete()
-    st.header("Comparaison", divider="gray")
+def section_comparaison():
     st.write("Compare deux périodes. Par défaut : deux périodes de même durée en mois complets "
              "(les derniers mois complets et les mêmes mois un an plus tôt quand le fichier le permet).")
     defaut = core.periodes_comparables(mois_info) or ((tous_mois[0], tous_mois[0]), (tous_mois[-1], tous_mois[-1]))
@@ -128,9 +123,7 @@ def page_comparaison():
                "d'établir les causes d'un écart.")
 
 
-def page_retards():
-    entete()
-    st.header("Retards", divider="gray")
+def section_retards():
     r = core.retard_pondere(f)
     if r.empty:
         st.info("Pas de colonne retard_moyen_min dans ce fichier.")
@@ -142,9 +135,7 @@ def page_retards():
     st.caption("Moyenne pondérée par nombre_mouvements. Les retards vides sont exclus, pas remplacés par zéro.")
 
 
-def page_anomalies():
-    entete()
-    st.header("Anomalies", divider="gray")
+def section_anomalies():
     ano = anomalies_avec_statut(f)
     st.write(f"Méthode : score = (valeur - médiane) / (1,4826 x MAD) par aérodrome et type de mouvement. Seuil : |score| > {core.SEUIL_ANOMALIE:g}. "
              "Les anomalies restent dans les totaux et sont à valider, la cause est inconnue.")
@@ -166,9 +157,11 @@ def page_anomalies():
         element = st.selectbox("Élément", etiquettes)
         decision = st.radio("Décision", ["Valider", "Rejeter", "Commenter"], horizontal=True)
         commentaire = st.text_input("Commentaire")
+        nom_expert = st.text_input("Nom de l'expert", key="anomalie_nom")
         if st.button("Enregistrer la décision"):
             traces.ajouter(traces.REGISTRE, {"fichier": os.path.basename(nom), "empreinte": emp, "element": element,
-                                             "decision": decision, "commentaire": commentaire})
+                                             "decision": decision, "commentaire": commentaire,
+                                             "nom": nom_expert.strip()})
             st.session_state.message_registre = True
             st.rerun()  # pour mettre à jour le statut dans le tableau ci-dessus
         if st.session_state.pop("message_registre", False):
@@ -180,9 +173,7 @@ def page_anomalies():
         st.dataframe(reg.drop(columns=["empreinte"]), width="stretch", hide_index=True)
 
 
-def page_qualite():
-    entete()
-    st.header("Qualité des données", divider="gray")
+def section_qualite():
     q1, q2, q3 = st.columns(3)
     q1.metric("Lignes du fichier", meta["lignes_brutes"])
     q2.metric("Lignes retenues", meta["lignes_propres"])
@@ -196,130 +187,103 @@ def page_qualite():
     st.caption("Le total brut additionne toutes les lignes du fichier, doublons et valeurs négatives compris. Il n'est jamais présenté comme correct.")
 
 
-def excel_bytes():
-    out = io.BytesIO()
-    totaux = core.totaux_mensuels(df, mois_info)
-    detail = df.pivot_table(index="mois", columns=["aerodrome", "type_mouvement"], values="nombre_mouvements", aggfunc="sum", fill_value=0)
-    detail.columns = [f"{a} {t}" for a, t in detail.columns]
-    rec2 = meta["brut_par_mois"].to_frame().join(df.groupby("mois")["nombre_mouvements"].sum().rename("total_nettoye"), how="outer").fillna(0)
-    rec2["ecart"] = rec2["total_nettoye"] - rec2["total_brut"]
-    anos = anomalies_avec_statut(df)
-    comm = pd.DataFrame({"commentaire": [core.commentaire_tendance(df, mois_info)]})
-    feuilles = {"Totaux mensuels": totaux, "Commentaire tendance": comm, "Detail arr-dep": detail.reset_index()}
-    for col, libelle in core.COLONNES_REPARTITION.items():
-        if col in df.columns:
-            feuilles[f"Repartition {col.split('_')[0]}"] = core.repartition(df, col)
-    feuilles.update({"Reconciliation brut": rec2.reset_index().rename(columns={"index": "mois", "date": "mois"}),
-                     "Journal nettoyage": journal, "Anomalies": anos,
-                     "Registre validation": registre().drop(columns=["empreinte"]),
-                     "Journal assistant": journal_assistant().drop(columns=["empreinte"])})
-    with pd.ExcelWriter(out, engine="openpyxl") as w:
-        for nom_f, d in feuilles.items():
-            d.to_excel(w, sheet_name=nom_f, index=False, startrow=3)
-            ws = w.sheets[nom_f]
-            ws["A1"] = f"AMT - {nom_f}"
-            ws["A2"] = MENTION
-            for col in ws.columns:
-                ws.column_dimensions[col[0].column_letter].width = 22
-    return out.getvalue()
-
-
-def pdf_bytes():
-    out = io.BytesIO()
-    st_ = getSampleStyleSheet()
-    doc = SimpleDocTemplate(out, pagesize=A4, leftMargin=1.5 * cm, rightMargin=1.5 * cm, topMargin=1.5 * cm, bottomMargin=1.5 * cm)
-    el = [Paragraph("Rapport d'analyse du trafic aérien", st_["Title"]),
-          Paragraph(f"Période : du {meta['date_min']:%d/%m/%Y} au {meta['date_max']:%d/%m/%Y} | Fichier : {escape(os.path.basename(nom))}", st_["Normal"]),
-          Paragraph(MENTION, st_["Italic"]), Spacer(1, 0.4 * cm)]
-    kp = [["Total nettoyé", "Total brut", "Écart", "Anomalies à valider"],
-          [fmt(meta["total_nettoye"]), fmt(meta["total_brut"]),
-           f"{meta['total_nettoye'] - meta['total_brut']:+,.0f}".replace(",", " "), str(int(df['anomalie'].sum()))]]
-    t = Table(kp); t.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.5, colors.grey), ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey)]))
-    anos_st = anomalies_avec_statut(df)
-    attente = int((anos_st["statut_validation"] == "En attente").sum())
-    statut = (f"Statut de validation : {len(anos_st) - attente} anomalie(s) traitée(s) par l'expert, {attente} en attente. "
-              + ("Des anomalies attendent encore une décision : rapport à ne pas utiliser en l'état." if attente
-                 else "Toutes les anomalies ont reçu une décision de l'expert.")
-              + " Validation finale de l'expert métier requise avant toute utilisation.")
-    el += [t, Spacer(1, 0.3 * cm), Paragraph(escape(statut), st_["Normal"]), Spacer(1, 0.4 * cm)]
-    comp = df[df["statut"] == "Complet"].groupby(["mois", "aerodrome"])["nombre_mouvements"].sum().unstack()
-    fig, ax = plt.subplots(figsize=(7.5, 3.2))
-    comp.plot(ax=ax, marker="o"); ax.set_xlabel("Mois"); ax.set_ylabel("Mouvements"); ax.set_title("Mouvements par mois (mois complets)")
-    ax.tick_params(axis="x", rotation=45); ax.legend(title="Aérodrome", fontsize=7); fig.tight_layout()
-    buf = io.BytesIO(); fig.savefig(buf, format="png", dpi=150); plt.close(fig); buf.seek(0)
-    el += [Image(buf, width=17 * cm, height=7.2 * cm), Spacer(1, 0.3 * cm),
-           Paragraph("Commentaire de tendance (calculé, mois complets seulement)", st_["Heading3"]),
-           Paragraph(escape(core.commentaire_tendance(df, mois_info)), st_["Normal"]), Spacer(1, 0.3 * cm)]
-    tm = core.totaux_mensuels(df, mois_info)
-    data = [["Mois", "Jours", "Statut"] + [c for c in tm.columns if c not in ("mois", "jours_couverts", "statut")]]
-    for r in tm.itertuples(index=False):
-        data.append([r[0], int(r[1]), r[2]] + [fmt(v) for v in r[3:]])
-    t2 = Table(data, repeatRows=1); t2.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.3, colors.grey), ("FONTSIZE", (0, 0), (-1, -1), 7), ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey)]))
-    el += [Paragraph("Totaux mensuels", st_["Heading3"]), t2, Spacer(1, 0.3 * cm)]
-    style_t = TableStyle([("GRID", (0, 0), (-1, -1), 0.3, colors.grey), ("FONTSIZE", (0, 0), (-1, -1), 7),
-                          ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey)])
-    for col, libelle in core.COLONNES_REPARTITION.items():
-        rp = core.repartition(df, col)
-        if rp.empty:
-            continue
-        lignes = [list(rp.columns)] + [[r[0]] + [f"{v:.1f} %" if r[0] == "Part (%)" else fmt(v) for v in r[1:]]
-                                       for r in rp.itertuples(index=False)]
-        tr = Table(lignes, repeatRows=1); tr.setStyle(style_t)
-        el += [Paragraph(f"Répartition : {libelle.lower()}", st_["Heading3"]), tr, Spacer(1, 0.3 * cm)]
-    el.append(Paragraph("Anomalies à valider (cause inconnue)", st_["Heading3"]))
-    if anos_st.empty:
-        el.append(Paragraph("Aucune anomalie statistique.", st_["Normal"]))
-    else:
-        lignes = [["Date", "Aérodrome", "Type", "Mouvements", "Score", "Ligne", "Décision de l'expert"]]
-        lignes += [[f"{r.date:%d/%m/%Y}", r.aerodrome, r.type_mouvement, fmt(r.nombre_mouvements), str(r.score_anomalie),
-                    str(int(r.ligne_fichier)), r.statut_validation] for r in anos_st.itertuples()]
-        ta = Table(lignes, repeatRows=1); ta.setStyle(style_t)
-        el.append(ta)
+def validation_export():
+    """Dernière décision de l'expert sur l'export, pour ce fichier : {"nom", "horodatage_utc"} si « Valider »,
+    sinon None. Un nouveau fichier (autre empreinte) n'a pas de validation : elle tombe."""
     reg = registre()
-    el.append(Paragraph("Registre de validation de l'expert métier", st_["Heading3"]))
-    if reg.empty:
-        el.append(Paragraph("Aucune décision enregistrée pour ce fichier.", st_["Normal"]))
-    else:
-        lignes = [["Horodatage", "Élément", "Décision", "Commentaire"]]
-        lignes += [[r.horodatage, Paragraph(escape(str(r.element)), st_["BodyText"]), r.decision,
-                    Paragraph(escape(str(r.commentaire or "")), st_["BodyText"])] for r in reg.itertuples()]
-        tg = Table(lignes, repeatRows=1, colWidths=[3.2 * cm, 6 * cm, 2.2 * cm, 6.5 * cm]); tg.setStyle(style_t)
-        el.append(tg)
-    ja = journal_assistant()
-    el.append(Paragraph("Questions posées à l'assistant (journal tracé)", st_["Heading3"]))
-    if ja.empty:
-        el.append(Paragraph("Aucune question posée pour ce fichier.", st_["Normal"]))
-    else:
-        resume = ", ".join(f"{k} : {v}" for k, v in ja["type_reponse"].value_counts().items())
-        el.append(Paragraph(escape(f"{len(ja)} question(s) ; types de réponse : {resume}. "
-                                   "Détail complet (question, réponse, chiffres) dans l'export Excel, feuille « Journal assistant »."),
-                            st_["Normal"]))
-        lignes = [["Horodatage", "Moteur", "Question", "Type de réponse"]]
-        lignes += [[r.horodatage, Paragraph(escape(str(r.moteur)), st_["BodyText"]),
-                    Paragraph(escape(str(r.question)), st_["BodyText"]), r.type_reponse]
-                   for r in ja.tail(20).itertuples()]
-        tj = Table(lignes, repeatRows=1, colWidths=[3.2 * cm, 3.4 * cm, 7.5 * cm, 3.8 * cm]); tj.setStyle(style_t)
-        el.append(tj)
-        if len(ja) > 20:
-            el.append(Paragraph("(20 dernières questions affichées)", st_["Italic"]))
-    el.append(Paragraph("Nettoyage", st_["Heading3"]))
-    for p_, n in journal["probleme"].str.replace(r" \(colonne .*\)", "", regex=True).str.replace(r"^\d+ jour.*", "Jours sans ligne", regex=True).value_counts().items():
-        el.append(Paragraph(f"{p_} : {n}", st_["Normal"]))
-    el += [Spacer(1, 0.3 * cm), Paragraph("Validation de l'expert métier requise avant toute utilisation. Aucune cause n'est avancée sans donnée pour la prouver.", st_["Italic"])]
-    doc.build(el)
-    return out.getvalue()
+    r = reg[reg["element"] == rapport.ELEMENT_EXPORT] if not reg.empty else reg
+    if r.empty or r.iloc[-1]["decision"] != "Valider":
+        return None
+    der = r.iloc[-1]
+    nom_v = der.get("nom")
+    return {"nom": nom_v if isinstance(nom_v, str) else "",
+            "horodatage_utc": der.get("horodatage_utc") if isinstance(der.get("horodatage_utc"), str) else der["horodatage"]}
 
 
-def page_exports():
-    entete()
-    st.header("Exports", divider="gray")
-    st.write("Les exports portent sur l'ensemble du fichier, sans les filtres, pour garder la traçabilité complète.")
-    e1, e2, e3 = st.columns(3)
-    e1.download_button("Export Excel", excel_bytes(), "amt_analyse_trafic.xlsx",
-                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", icon=":material/table_view:")
-    e2.download_button("Export PDF", pdf_bytes(), "amt_rapport_trafic.pdf", "application/pdf", icon=":material/picture_as_pdf:")
-    e3.download_button("Données nettoyées (CSV)", df.drop(columns=["statut"]).to_csv(index=False).encode("utf-8-sig"),
-                       "trafic_nettoye.csv", "text/csv", icon=":material/download:")
+def analyse_courante():
+    return rapport.analyser(df, journal, mois_info, meta, os.path.basename(nom), emp, rapport.sources_excel(contenu, nom))
+
+
+def rapport_excel(validation):
+    return rapport.construire_excel(analyse_courante(), registre(), validation)
+
+
+def rapport_pdf(validation):
+    return rapport.construire_pdf(analyse_courante(), registre(), validation)
+
+
+def enregistrer_validation_export(decision):
+    nom_expert = (st.session_state.get("export_nom") or "").strip()
+    commentaire = (st.session_state.get("export_commentaire") or "").strip()
+    traces.ajouter(traces.REGISTRE, {"fichier": os.path.basename(nom), "empreinte": emp,
+                                     "element": rapport.ELEMENT_EXPORT, "decision": decision,
+                                     "commentaire": commentaire, "nom": nom_expert})
+    st.session_state.message_export = decision
+
+
+ICONES_CONTROLE = {True: ":green[:material/check_circle:]", False: ":red[:material/cancel:]",
+                   None: ":gray[:material/help:]"}
+
+
+def section_exports():
+    st.write("Rapport complet au format des livrables de l'agent AMT : Excel (tableau de bord à filtres, formules, "
+             "données nettoyées) et PDF (tableau de bord, analyse, registre). Il porte sur tout le fichier, sans les "
+             "filtres de la barre latérale.")
+    val = validation_export()
+    with st.container(border=True):
+        st.markdown("**Validation de l'expert métier**")
+        message = st.session_state.pop("message_export", None)
+        if message == "Valider":
+            st.success("Décision enregistrée au registre : exports Excel et PDF déverrouillés.")
+        elif message:
+            st.info(f"Décision « {message} » enregistrée au registre. Elle a été prise en compte : revoyez "
+                    "l'analyse puis redemandez la validation. Les exports restent verrouillés.")
+        if val:
+            qui = f" par **{val['nom']}**" if val["nom"] else ""
+            st.caption(f":material/verified: Validé{qui} le {val['horodatage_utc']} UTC, pour ce fichier "
+                       f"(empreinte `{emp}`). Un nouveau fichier demandera une nouvelle validation.")
+        else:
+            st.warning("Aucun export Excel ou PDF avant validation. Validation de l'expert métier requise : "
+                       "Valider / Rejeter / Commenter ?", icon=":material/lock:")
+        with st.container(horizontal=True, vertical_alignment="bottom"):
+            st.text_input("Nom de l'expert", key="export_nom", placeholder="Prénom Nom")
+            st.text_input("Commentaire", key="export_commentaire")
+        with st.container(horizontal=True):
+            st.button("Valider", type="primary", icon=":material/check:", on_click=enregistrer_validation_export,
+                      args=("Valider",))
+            st.button("Rejeter", icon=":material/close:", on_click=enregistrer_validation_export, args=("Rejeter",))
+            st.button("Commenter", icon=":material/comment:", on_click=enregistrer_validation_export,
+                      args=("Commenter",))
+        st.caption("Chaque décision est enregistrée au registre (date et heure UTC, nom déclaré) et figure en "
+                   "dernière page du PDF. Elle ne modifie jamais les données d'origine.")
+    nom_xlsx, nom_pdf = rapport.nom_fichiers()
+    if val:
+        cle = (emp, val["horodatage_utc"], len(registre()))
+        pret = st.session_state.get("rapport_pret")
+        if not pret or pret["cle"] != cle:
+            if st.button("Préparer le rapport (Excel et PDF)", type="primary", icon=":material/description:"):
+                with st.spinner("Construction et relecture du rapport..."):
+                    A = analyse_courante()
+                    reg = registre()
+                    x = rapport.construire_excel(A, reg, val)
+                    p = rapport.construire_pdf(A, reg, val)
+                    st.session_state.rapport_pret = {"cle": cle, "xlsx": x, "pdf": p,
+                                                     "controles": rapport.relire(A, x, p)}
+                st.rerun()
+        else:
+            with st.container(horizontal=True):
+                st.download_button(nom_xlsx, pret["xlsx"], nom_xlsx,
+                                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                   icon=":material/table_view:", on_click="ignore", type="primary")
+                st.download_button(nom_pdf, pret["pdf"], nom_pdf, "application/pdf",
+                                   icon=":material/picture_as_pdf:", on_click="ignore", type="primary")
+            echecs = [c for c in pret["controles"] if c[1] is False]
+            with st.expander("Relecture avant livraison" + (" : contrôle en échec" if echecs else " : contrôles réussis"),
+                             icon=":material/fact_check:", expanded=bool(echecs)):
+                for nom_c, ok, detail in pret["controles"]:
+                    st.markdown(f"{ICONES_CONTROLE[ok]} {nom_c} : {detail}")
+    st.download_button("Données nettoyées (CSV)", df.drop(columns=["statut"]).to_csv(index=False).encode("utf-8-sig"),
+                       "trafic_nettoye.csv", "text/csv", icon=":material/download:", on_click="ignore")
 
 
 # =====================================================================
@@ -368,9 +332,11 @@ def poser():
                                       "fichier": nom, "empreinte": emp}
 
 
-def interroger_agent(attente, sur_etat=None):
-    """Envoie la seule question à l'agent Copilot Studio (mode secret Direct Line) et ajoute sa réponse,
-    telle quelle, au fil. Le secret est lu par copilot.py dans l'environnement, jamais ici."""
+def interroger_agent(attente, sur_etat=None, sur_progression=None):
+    """Envoie la seule question à l'agent Copilot Studio (mode secret Direct Line) et ajoute sa réponse au fil.
+    Seuls les liens sandbox: (inaccessibles au navigateur) sont remplacés à l'affichage ; le journal garde la
+    réponse originale. Les fichiers joints sont récupérés tout de suite et conservés dans traces/fichiers/.
+    Le secret est lu par copilot.py dans l'environnement, jamais ici."""
     question = attente["question"]
     url, dl = copilot.configuration_env()
     conv = st.session_state.agent_conv
@@ -381,13 +347,36 @@ def interroger_agent(attente, sur_etat=None):
         if conv is None:
             conv = copilot.ouvrir_conversation(url, dl or None)
             st.session_state.agent_conv = conv
-        r = copilot.demander(conv, question, sur_etat=sur_etat)
+        if attente.get("reprise"):  # réponse arrivée après le délai : relecture, rien n'est renvoyé à l'agent
+            r = copilot.attendre_reponse(conv, attente["reprise"]["id_envoi"], sur_etat=sur_etat,
+                                         sur_progression=sur_progression)
+        else:
+            r = copilot.demander(conv, question, sur_etat=sur_etat, sur_progression=sur_progression)
         texte = "\n\n".join(r.textes)
-        st.session_state.chat.append({"role": "assistant", "content": texte, "pieces": r.pieces_jointes,
-                                      "fichiers": r.fichiers, "incomplete": not r.complete})
+        fichiers = copilot.recuperer_fichiers(conv, r.fichiers)
+        references = []
+        for f in fichiers:
+            if f.get("contenu") is not None:
+                f["reference"] = traces.enregistrer_fichier(f["contenu"], f["nom"], f["type"])
+                references.append(f["reference"])
+        affiche = copilot.remplacer_liens_sandbox(texte, [f["nom"] for f in fichiers])
+        st.session_state.chat.append({"role": "assistant", "content": affiche, "pieces": r.pieces_jointes,
+                                      "fichiers": fichiers, "incomplete": not r.complete,
+                                      "suite": None if r.complete else {"id_envoi": r.id_envoi, "question": question,
+                                                                        "langue": attente["langue"]}})
         traces.ajouter(traces.JOURNAL, {**entree, "type_reponse": "reponse_agent" if r.complete
                                         else "reponse_agent_incomplete", "reponse": texte,
-                                        "conversation_agent": r.conversation_id, "duree_s": r.duree})
+                                        "conversation_agent": r.conversation_id, "duree_s": r.duree,
+                                        "fichiers": references})
+    except copilot.ReponseEnRetard as ex:  # l'agent travaille peut-être encore : réponse récupérable
+        texte = f"L'agent n'a pas encore répondu. {ex}"
+        st.session_state.chat.append({"role": "assistant", "content": texte, "echec": question,
+                                      "langue": attente["langue"],
+                                      "suite": {"id_envoi": ex.id_envoi, "question": question,
+                                                "langue": attente["langue"]}})
+        traces.ajouter(traces.JOURNAL, {**entree, "type_reponse": "reponse_agent_en_retard", "reponse": texte,
+                                        "conversation_agent": conv.id if conv else None,
+                                        "duree_s": round(time.time() - debut, 1)})
     except Exception as ex:  # jamais de plantage : message clair et secours discret
         raison = str(ex) if isinstance(ex, copilot.ErreurAgent) else f"erreur inattendue ({type(ex).__name__})."
         texte = f"L'agent n'a pas pu répondre : {raison}"
@@ -396,6 +385,12 @@ def interroger_agent(attente, sur_etat=None):
         traces.ajouter(traces.JOURNAL, {**entree, "type_reponse": "erreur_agent", "reponse": texte,
                                         "conversation_agent": conv.id if conv else None,
                                         "duree_s": round(time.time() - debut, 1)})
+
+
+def recuperer_reponse(suite):
+    """Relit la conversation pour récupérer la réponse (ou la suite) arrivée après le délai d'attente."""
+    st.session_state.agent_attente = {"question": suite["question"], "langue": suite["langue"], "fichier": nom,
+                                      "empreinte": emp, "reprise": suite}
 
 
 def secours_local(question, lg):
@@ -407,9 +402,7 @@ def nouvelle_conversation():
     st.session_state.update(chat=[], chat_nouveau=False, agent_conv=None, agent_attente=None)
 
 
-def page_tracabilite():
-    entete()
-    st.header("Traçabilité", divider="gray")
+def section_tracabilite():
     st.caption(f"Fichier analysé : {os.path.basename(nom)} | empreinte SHA-256 : `{emp}`. Les journaux sont conservés "
                f"sur disque (dossier traces/), ajoutés ligne par ligne et jamais modifiés ; ils sont repris dans les exports.")
     reg, ja = registre(), journal_assistant()
@@ -430,10 +423,136 @@ def page_tracabilite():
     if ja.empty:
         st.info("Aucune question posée à l'assistant pour ce fichier (page Discuter).")
     else:
-        st.dataframe(ja.drop(columns=["empreinte"]), width="stretch", hide_index=True,
+        st.dataframe(journal_lisible(ja), width="stretch", hide_index=True,
                      column_config={"reponse": st.column_config.TextColumn("réponse", width="large")})
-        st.download_button("Journal de l'assistant (CSV)", ja.to_csv(index=False).encode("utf-8-sig"),
+        st.download_button("Journal de l'assistant (CSV)", journal_lisible(ja).to_csv(index=False).encode("utf-8-sig"),
                            "journal_assistant.csv", "text/csv", icon=":material/download:")
+    fichiers_recus = [(r.horodatage, r.question, ref) for r in ja.itertuples()
+                      if isinstance(r.fichiers, list) for ref in r.fichiers if isinstance(ref, dict)]
+    st.subheader("Fichiers reçus de l'agent")
+    if not fichiers_recus:
+        st.info("Aucun fichier reçu de l'agent pour ce jeu de données.")
+    for k, (quand, question, ref) in enumerate(reversed(fichiers_recus)):
+        with st.container(horizontal=True, vertical_alignment="center"):
+            contenu = traces.lire_fichier(ref)
+            if contenu is None:
+                st.caption(f":material/error: {ref.get('nom')} : fichier absent du dossier traces/fichiers/.")
+            else:
+                st.download_button(ref["nom"], contenu, ref["nom"], ref.get("type") or "application/octet-stream",
+                                   key=f"trace_fichier_{k}", icon=":material/download:", on_click="ignore")
+            st.caption(f"{quand} · {fmt(ref.get('taille', 0))} octets · empreinte `{ref.get('empreinte')}` · "
+                       f"question : {question}")
+
+
+ONGLETS = {"Vue d'ensemble": "section_vue", "Comparaison": "section_comparaison", "Retards": "section_retards",
+           "Anomalies": "section_anomalies", "Qualité des données": "section_qualite",
+           "Traçabilité": "section_tracabilite", "Exports": "section_exports"}
+
+
+def page_tableau():
+    entete()
+    onglets = st.tabs(list(ONGLETS), key="onglet_tableau", on_change="rerun")
+    for onglet, fonction in zip(onglets, ONGLETS.values()):
+        if onglet.open:  # seul l'onglet affiché est calculé (les exports ne sont générés qu'au clic)
+            with onglet:
+                globals()[fonction]()
+
+
+# =====================================================================
+# Journal de l'agent : ce que l'agent a fait, session par session
+# =====================================================================
+SANS_SESSION = "Sans conversation (calcul local ou agent non joint)"
+
+
+def sessions_agent(ja):
+    """Une ligne par session (conversation Direct Line) : début, fin, questions, réponses, erreurs, durée."""
+    ja = ja.copy()
+    ja["session"] = [c if isinstance(c, str) and c else SANS_SESSION for c in ja["conversation_agent"]]
+    ja["nb_fichiers"] = [len(v) if isinstance(v, list) else 0 for v in ja["fichiers"]]
+    ja["duree_s"] = pd.to_numeric(ja["duree_s"], errors="coerce")
+    t = ja.groupby("session", sort=False).agg(
+        debut=("horodatage", "min"), fin=("horodatage", "max"), questions=("question", "size"),
+        reponses=("type_reponse", lambda v: int((v == "reponse_agent").sum())),
+        incompletes=("type_reponse", lambda v: int((v == "reponse_agent_incomplete").sum())),
+        erreurs=("type_reponse", lambda v: int((v == "erreur_agent").sum())),
+        secours=("moteur", lambda v: int((v == traces.MOTEUR_CALCUL).sum())),
+        duree_moyenne_s=("duree_s", "mean"), fichiers=("nb_fichiers", "sum"))
+    t["duree_moyenne_s"] = t["duree_moyenne_s"].round(1)
+    return t.sort_values("debut", ascending=False).reset_index(), ja
+
+
+def rapport_sessions_markdown(resume, ja):
+    lignes = ["# Journal de l'agent AMT", "", f"Jeu de données : {os.path.basename(nom)} (empreinte {emp})",
+              f"Rapport du {pd.Timestamp.now():%d/%m/%Y à %H:%M}", ""]
+    for s_ in resume.itertuples():
+        lignes += [f"## Session {s_.session}", "",
+                   f"Du {s_.debut} au {s_.fin} : {s_.questions} question(s), {s_.reponses} réponse(s) complète(s), "
+                   f"{s_.incompletes} incomplète(s), {s_.erreurs} erreur(s), {s_.secours} réponse(s) de secours, "
+                   f"{s_.fichiers} fichier(s) reçu(s).", ""]
+        for e in ja[ja["session"] == s_.session].sort_values("horodatage").itertuples():
+            lignes += [f"### {e.horodatage} · {LIBELLES_TYPE.get(e.type_reponse, e.type_reponse)}", "",
+                       f"**Question :** {e.question}", "", str(e.reponse), ""]
+            if isinstance(e.fichiers, list) and e.fichiers:
+                lignes += ["Fichiers reçus : " + ", ".join(f.get("nom", "") for f in e.fichiers), ""]
+    lignes += ["---", MENTION]
+    return "\n".join(lignes)
+
+
+LIBELLES_TYPE = {"reponse_agent": "Réponse de l'agent", "reponse_agent_incomplete": "Réponse incomplète",
+                 "reponse_agent_en_retard": "Délai dépassé (réponse récupérable)",
+                 "erreur_agent": "Erreur", "reponse_locale": "Réponse calculée localement"}
+
+
+def page_journal_agent():
+    st.title("Journal de l'agent")
+    st.caption(f"Ce que l'agent a fait, session par session, pour le jeu de données {os.path.basename(nom)} "
+               f"(empreinte `{emp}`). Une session correspond à une conversation avec l'agent ; "
+               "« Nouvelle conversation » (page Discuter) en ouvre une autre. Journal conservé sur disque, jamais modifié.")
+    ja = journal_assistant()
+    if ja.empty:
+        st.info("Aucun échange avec l'agent pour ce jeu de données. Posez une question dans la page Discuter.")
+        return
+    resume, ja = sessions_agent(ja)
+    with st.container(horizontal=True):
+        st.metric("Sessions", len(resume), border=True)
+        st.metric("Questions", len(ja), border=True)
+        st.metric("Réponses complètes", int(resume["reponses"].sum()), border=True)
+        st.metric("Erreurs", int(resume["erreurs"].sum()), border=True)
+        st.metric("Fichiers reçus", int(resume["fichiers"].sum()), border=True)
+    with st.container(horizontal=True, vertical_alignment="center"):
+        st.subheader("Sessions", width="stretch")
+        st.download_button("Rapport (Markdown)", lambda: rapport_sessions_markdown(resume, ja),
+                           "journal_agent_amt.md", "text/markdown", icon=":material/description:", on_click="ignore")
+        st.download_button("Sessions (CSV)", resume.to_csv(index=False).encode("utf-8-sig"), "sessions_agent.csv",
+                           "text/csv", icon=":material/download:", on_click="ignore")
+    st.dataframe(resume, hide_index=True, width="stretch", alt="Résumé des sessions avec l'agent", column_config={
+        "session": st.column_config.TextColumn("Session"), "debut": "Début", "fin": "Fin",
+        "questions": "Questions", "reponses": "Réponses", "incompletes": "Incomplètes", "erreurs": "Erreurs",
+        "secours": "Secours local", "duree_moyenne_s": st.column_config.NumberColumn("Durée moyenne", format="%.1f s"),
+        "fichiers": "Fichiers"})
+    st.subheader("Détail par session")
+    for n_s, s_ in enumerate(resume.itertuples()):
+        titre = f"{s_.debut} · {s_.questions} question(s) · session {s_.session}"
+        with st.expander(titre, icon=":material/forum:", expanded=n_s == 0):
+            for k, e in enumerate(ja[ja["session"] == s_.session].sort_values("horodatage").itertuples()):
+                with st.container(border=True):
+                    duree = f" · {e.duree_s:g} s" if pd.notna(e.duree_s) else ""
+                    st.caption(f"{e.horodatage} · {LIBELLES_TYPE.get(e.type_reponse, e.type_reponse)} · "
+                               f"{e.moteur}{duree}")
+                    st.markdown(f"**Question :** {e.question}")
+                    st.markdown(copilot.remplacer_liens_sandbox(str(e.reponse), [
+                        f.get("nom", "") for f in (e.fichiers if isinstance(e.fichiers, list) else [])]))
+                    if isinstance(e.fichiers, list) and e.fichiers:
+                        with st.container(horizontal=True):
+                            for j, ref in enumerate(e.fichiers):
+                                contenu = traces.lire_fichier(ref)
+                                if contenu is not None:
+                                    st.download_button(ref["nom"], contenu, ref["nom"],
+                                                       ref.get("type") or "application/octet-stream",
+                                                       key=f"journal_fichier_{n_s}_{k}_{j}",
+                                                       icon=":material/download:", on_click="ignore")
+                                else:
+                                    st.caption(f":material/error: {ref.get('nom')} : fichier absent de traces/fichiers/.")
 
 
 def effet_frappe(texte):
@@ -442,34 +561,16 @@ def effet_frappe(texte):
         time.sleep(0.008)
 
 
-TAILLE_MAX_JOINT = 20 * 1024 * 1024
-
-
-def fichier_data(url):
-    """Contenu d'une adresse data: (base64), ou None si elle est invalide ou trop grande."""
-    entete_d, _, donnees = url.partition(",")
-    if not entete_d.endswith(";base64") or len(donnees) > TAILLE_MAX_JOINT * 4 // 3 + 4:
-        return None
-    try:
-        return base64.b64decode(donnees, validate=True)
-    except ValueError:
-        return None
-
-
 def afficher_fichiers(i, fichiers):
-    """Fichiers envoyés par l'agent : lien https ouvert dans un nouvel onglet, ou téléchargement direct."""
+    """Fichiers envoyés par l'agent : un bouton de téléchargement par fichier (contenu déjà récupéré)."""
     with st.container(horizontal=True):
         for k, f in enumerate(fichiers):
-            nom_j = Path(f["nom"]).name or "fichier_agent"
-            if f["url"].startswith("https://"):
-                st.link_button(nom_j, f["url"], icon=":material/download:")
-            else:
-                contenu = fichier_data(f["url"])
-                if contenu is None:
-                    st.caption(f"{nom_j} : fichier joint illisible ou trop volumineux.")
-                else:
-                    st.download_button(nom_j, contenu, nom_j, f["type"], key=f"joint_{i}_{k}",
-                                       icon=":material/download:", on_click="ignore")
+            if f.get("contenu") is not None:
+                st.download_button(f["nom"], f["contenu"], f["nom"], f["type"], key=f"joint_{i}_{k}",
+                                   icon=":material/download:", on_click="ignore")
+    for f in fichiers:
+        if f.get("contenu") is None:
+            st.caption(f":material/error: {f['nom']} : {f.get('erreur', 'fichier joint indisponible.')}")
 
 
 def discussion_markdown():
@@ -494,16 +595,21 @@ def menu_export():
                            "text/markdown", icon=":material/chat:", width="stretch", on_click="ignore",
                            disabled=not st.session_state.chat)
         if df is not None:
-            st.download_button("Rapport Excel", excel_bytes, "amt_analyse_trafic.xlsx",
+            val = validation_export()
+            nom_xlsx, nom_pdf = rapport.nom_fichiers()
+            st.download_button(f"Rapport Excel ({nom_xlsx})", lambda: rapport_excel(val), nom_xlsx,
                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               icon=":material/table_view:", width="stretch", on_click="ignore")
-            st.download_button("Rapport PDF", pdf_bytes, "amt_rapport_trafic.pdf", "application/pdf",
-                               icon=":material/picture_as_pdf:", width="stretch", on_click="ignore")
+                               icon=":material/table_view:", width="stretch", on_click="ignore", disabled=not val)
+            st.download_button(f"Rapport PDF ({nom_pdf})", lambda: rapport_pdf(val), nom_pdf, "application/pdf",
+                               icon=":material/picture_as_pdf:", width="stretch", on_click="ignore", disabled=not val)
+            if not val:
+                st.caption(":material/lock: Rapports verrouillés : validation de l'expert requise (Tableau de bord, "
+                           "onglet Exports).")
             st.download_button("Données nettoyées (CSV)",
                                lambda: df.drop(columns=["statut"]).to_csv(index=False).encode("utf-8-sig"),
                                "trafic_nettoye.csv", "text/csv", icon=":material/dataset:", width="stretch",
                                on_click="ignore")
-        st.caption("Les rapports portent sur tout le fichier, sans les filtres.")
+        st.caption("Les rapports portent sur tout le fichier, sans les filtres. Relecture complète : onglet Exports.")
 
 
 def page_chat():
@@ -535,6 +641,10 @@ def page_chat():
                         if msg.get("incomplete"):
                             st.caption(":material/hourglass_bottom: Réponse peut-être incomplète : délai de "
                                        f"{copilot.DELAI_MAX} s atteint alors que l'agent répondait encore.")
+                        if msg.get("suite") and i == dernier and st.session_state.agent_conv is not None:
+                            st.button("Récupérer la suite de la réponse" if msg.get("incomplete")
+                                      else "Récupérer la réponse", icon=":material/refresh:", key=f"suite_{i}",
+                                      type="secondary", on_click=recuperer_reponse, args=(msg["suite"],))
                         if msg.get("fichiers"):
                             afficher_fichiers(i, msg["fichiers"])
                         if msg.get("pieces"):
@@ -550,7 +660,8 @@ def page_chat():
             if attente:
                 with st.container(key=f"reponse_{len(st.session_state.chat)}"):
                     zone = st.empty()
-                    attente_ui = {"spinner": None, "texte": None}
+                    attente_ui = {"spinner": None, "texte": None, "etat": "L'agent analyse le fichier",
+                                  "secondes": 0}
 
                     def afficher_attente(texte):
                         if attente_ui["texte"] == texte:
@@ -562,9 +673,20 @@ def page_chat():
                             sp.__enter__()
                         attente_ui.update(spinner=sp, texte=texte)
 
-                    afficher_attente("L'agent analyse le fichier...")
-                    try:  # activité « typing » reçue : l'agent travaille encore
-                        interroger_agent(attente, sur_etat=lambda _e: afficher_attente("L'agent réfléchit..."))
+                    def maj_attente(etat=None, secondes=None):
+                        if etat:
+                            attente_ui["etat"] = etat
+                        if secondes is not None:
+                            attente_ui["secondes"] = secondes
+                        duree = f" ({attente_ui['secondes']} s)" if attente_ui["secondes"] >= 10 else ""
+                        afficher_attente(f"{attente_ui['etat']}...{duree}")
+
+                    if attente.get("reprise"):
+                        attente_ui["etat"] = "Récupération de la réponse de l'agent"
+                    maj_attente()
+                    try:  # « typing » reçu : l'agent travaille encore ; temps d'attente affiché après 10 s
+                        interroger_agent(attente, sur_etat=lambda _e: maj_attente(etat="L'agent réfléchit"),
+                                         sur_progression=lambda sec: maj_attente(secondes=sec))
                     finally:
                         attente_ui["spinner"].__exit__(None, None, None)
                 st.session_state.update(agent_attente=None, chat_nouveau=True)
@@ -573,72 +695,16 @@ def page_chat():
 
 
 # =====================================================================
-# Assistant : agent Copilot Studio
-# =====================================================================
-def page_agent():
-    st.title("Voir l'agent")
-    st.caption("L'agent conversationnel du projet, intégré par son adresse ou son code d'intégration.")
-    saisie = st.text_area("Adresse https:// de l'agent ou code d'intégration <iframe>",
-                          value=os.environ.get("AMT_AGENT_URL", ""), height=90, key="agent_saisie",
-                          placeholder="https://copilotstudio.microsoft.com/environments/.../webchat?... ou <iframe src=\"https://...\"></iframe>")
-    adresse, erreur = None, None
-    texte = saisie.strip()
-    if texte:
-        if "<iframe" in texte.lower():
-            m = re.search(r"""src\s*=\s*["'](https://[^"'\s]+)["']""", texte, re.I)
-            if m:
-                adresse = m.group(1).replace("&amp;", "&")
-            else:
-                erreur = "Code <iframe> reconnu, mais sans adresse src en https://."
-        elif re.fullmatch(r"https://\S+", texte):
-            adresse = texte
-        elif texte.lower().startswith("http://"):
-            erreur = "Adresse refusée : utilisez une adresse sécurisée https://."
-        else:
-            erreur = "Saisie non reconnue : collez une adresse https:// ou un code <iframe>."
-    if erreur:
-        st.warning(erreur)
-    if adresse:
-        st.link_button("Ouvrir l'agent dans un nouvel onglet", adresse, icon=":material/open_in_new:")
-        st.iframe(adresse, height=620, alt="Agent Copilot Studio")
-        st.caption("Si la fenêtre reste blanche, le site de l'agent bloque l'affichage intégré : utilisez le bouton "
-                   "« Ouvrir l'agent dans un nouvel onglet ». Pour la sécurité, seul l'attribut src d'un code <iframe> "
-                   "est utilisé : aucun script collé n'est exécuté.")
-    with st.expander("Mode d'emploi : intégrer l'agent Copilot Studio", expanded=not adresse):
-        st.markdown(
-            "1. Dans **Copilot Studio**, ouvrir l'agent puis cliquer sur **Publier** (à refaire après chaque modification).\n"
-            "2. Ouvrir **Canaux** (*Channels*).\n"
-            "3. Choisir **Site web de démonstration** (*Demo website*) et copier l'**adresse https://**, "
-            "ou **Site web personnalisé** (*Custom website*) et copier le **code d'intégration** `<iframe>`.\n"
-            "4. Coller l'adresse ou le code dans la zone ci-dessus : l'agent s'affiche dans la page.\n"
-            "5. Si l'affichage est bloqué ou demande une connexion, utiliser **Ouvrir l'agent dans un nouvel onglet**.\n\n"
-            "Astuce démonstration : lancer l'application avec `AMT_AGENT_URL=https://... streamlit run app.py` "
-            "pour pré-remplir l'adresse. L'intégration dans un site peut exiger un réglage de l'authentification "
-            "de l'agent (Paramètres > Sécurité) : à vérifier selon la politique de votre organisation.")
-
-
-# =====================================================================
 # Navigation (barre latérale), chargement et filtres
 # =====================================================================
+P_TABLEAU = st.Page(page_tableau, title="Tableau de bord", icon=":material/dashboard:", url_path="tableau",
+                    default=True)
+P_JOURNAL = st.Page(page_journal_agent, title="Journal de l'agent", icon=":material/receipt_long:",
+                    url_path="journal")
 P_CHAT = st.Page(page_chat, title="Discuter", icon=":material/chat:", url_path="discuter")
-P_AGENT = st.Page(page_agent, title="Voir l'agent", icon=":material/smart_toy:", url_path="agent")
-page = st.navigation({
-    "Tableau de bord": [
-        st.Page(page_vue, title="Vue d'ensemble", icon=":material/dashboard:", url_path="vue", default=True),
-        st.Page(page_comparaison, title="Comparaison", icon=":material/compare_arrows:", url_path="comparaison"),
-        st.Page(page_retards, title="Retards", icon=":material/schedule:", url_path="retards"),
-        st.Page(page_anomalies, title="Anomalies", icon=":material/report:", url_path="anomalies"),
-        st.Page(page_qualite, title="Qualité des données", icon=":material/fact_check:", url_path="qualite"),
-        st.Page(page_tracabilite, title="Traçabilité", icon=":material/history:", url_path="tracabilite"),
-        st.Page(page_exports, title="Exports", icon=":material/download:", url_path="exports"),
-    ],
-    "Assistant": [P_CHAT, P_AGENT],
-}, position="sidebar")
+page = st.navigation([P_TABLEAU, P_JOURNAL, P_CHAT], position="sidebar")
 sur_chat = page.url_path == P_CHAT.url_path
-
-if page.url_path == P_AGENT.url_path:  # l'intégration de l'agent ne dépend pas du fichier
-    page.run()
-    st.stop()
+sur_tableau = page.url_path == P_TABLEAU.url_path
 
 # Barre latérale : conversation, jeu de données, filtres, puis « Avancé » (replié).
 with st.sidebar:
@@ -742,7 +808,7 @@ valeurs_cat = {c: sorted(df[c].dropna().astype(str).unique()) for c in core.COLO
 # leur valeur quand on change de page, y compris en passant par Discuter où ils sont masqués.
 with zone_filtres:
     st.caption(f"Période du fichier : du {meta['date_min']:%d/%m/%Y} au {meta['date_max']:%d/%m/%Y}")
-    if sur_chat:  # la discussion porte toujours sur le fichier complet
+    if not sur_tableau:  # la discussion et le journal portent toujours sur le fichier complet
         choix, inclure_inc, (d_deb, d_fin) = aeros, False, (tous_mois[0], tous_mois[-1])
     else:
         choix = st.multiselect("Aérodromes", aeros, default=aeros, key=f"filtre_aeros_{emp}", persist_state="session")
