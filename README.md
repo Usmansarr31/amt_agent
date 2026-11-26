@@ -24,7 +24,7 @@ L'application compte trois pages.
 | Anomalies | Détection statistique (score MAD), validation ou rejet par l'expert, registre conservé |
 | Qualité des données | Journal de nettoyage, réconciliation brut / nettoyé, mois incomplets |
 | Traçabilité | Registre des décisions de l'expert, journal des échanges et fichiers reçus de l'agent |
-| Exports | Validation de l'expert, puis rapport `Rapport_AMT_<date>` en Excel et PDF (voir « Rapport AMT ») ; données nettoyées en CSV |
+| Exports | Rapport `Rapport_AMT_<date>` en Excel et PDF (voir « Rapport AMT »), données nettoyées en CSV |
 
 **2. Journal de l'agent.** Ce que l'agent a fait, session par session (une session est une conversation) :
 
@@ -150,7 +150,7 @@ L'agent garde le contexte d'une question à l'autre. Le bouton « Nouvelle conve
 Le bouton **Exporter**, en haut de la discussion, télécharge :
 
 - la discussion (Markdown) ;
-- le rapport Excel et le rapport PDF (`Rapport_AMT_<date>`), seulement après validation ;
+- le rapport Excel et le rapport PDF (`Rapport_AMT_<date>`) ;
 - les données nettoyées (CSV).
 
 Quand l'agent joint des fichiers à sa réponse (champ `attachments` : `contentUrl` ou `content`), l'application les récupère dès l'arrivée de la réponse et affiche un bouton de téléchargement par fichier. Un fichier hébergé par Direct Line est téléchargé avec le jeton de la conversation. Ce jeton n'est envoyé qu'à Direct Line et n'est jamais affiché ni journalisé. Les cartes adaptatives ne sont pas des fichiers et ne sont pas affichées.
@@ -201,7 +201,7 @@ Les tests couvrent :
 
 Le rapport suit le format des livrables de l'agent AMT. Il porte sur tout le fichier, sans les filtres de la barre latérale.
 
-**Verrou de validation.** Aucun export Excel ou PDF avant la validation de l'expert. Dans l'onglet Exports, l'expert saisit son nom puis clique sur **Valider**, **Rejeter** ou **Commenter**. Chaque décision est enregistrée au registre, avec la date et l'heure en UTC et le nom déclaré. Un rejet ou un commentaire reverrouille les exports. Un nouveau fichier demande une nouvelle validation.
+Le bouton **« Préparer le rapport (Excel et PDF) »** de l'onglet Exports construit les deux fichiers. Le menu « Exporter » du chat propose les mêmes fichiers.
 
 **Excel `Rapport_AMT_<date>.xlsx` :**
 

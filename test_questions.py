@@ -612,7 +612,7 @@ class InterfaceAgentUnique(unittest.TestCase):
         import rapport
         nom_xlsx, nom_pdf = rapport.nom_fichiers()
         menu = {e.proto.label: e.proto.disabled for e in at.get("download_button")}
-        self.assertTrue(menu[f"Rapport Excel ({nom_xlsx})"] and menu[f"Rapport PDF ({nom_pdf})"])  # non validé
+        self.assertFalse(menu[f"Rapport Excel ({nom_xlsx})"] or menu[f"Rapport PDF ({nom_pdf})"])  # sans verrou
         for libelle in ("Discussion (Markdown)", "Données nettoyées (CSV)",
                         "Journal_AMT_2026-11-25.csv", "export_agent.csv", "Synthese_trafic.pdf"):
             self.assertIn(libelle, boutons)
@@ -638,7 +638,7 @@ class InterfaceAgentUnique(unittest.TestCase):
         self.assertTrue(traces.lire_fichier(refs[2]).startswith(b"%PDF"))
         self.onglet(at, "Exports")  # page Exports avec un journal qui contient des fichiers
         self.assertEqual([b.proto.label for b in at.get("download_button")],
-                         ["Données nettoyées (CSV)"])  # seul l'onglet ouvert est calculé ; rapports verrouillés
+                         ["Données nettoyées (CSV)"])  # seul l'onglet ouvert est calculé ; rapport préparé au clic
         self.aller(at, "journal")  # Journal de l'agent : une session, ses fichiers téléchargeables
         self.assertFalse(at.exception)
         self.assertEqual(at.title[0].value, "Journal de l'agent")
@@ -686,20 +686,12 @@ class InterfaceAgentUnique(unittest.TestCase):
         self.assertEqual(sum(m["role"] == "user" for m in at.session_state.chat), 1)  # question non renvoyée
         self.assertFalse([b for b in at.button if b.label == "Récupérer la réponse"])
 
-    def test_verrou_validation_export(self):
+    def test_exports_sans_verrou(self):
         import rapport
-        import traces
         at = self.app()
         self.onglet(at, "Exports")
-        self.assertIn("Aucun export Excel ou PDF avant validation", at.warning[0].value)
-        self.assertFalse([b for b in at.button if b.label.startswith("Préparer")])
-        at.text_input(key="export_nom").set_value("Awa Diop")
-        [b for b in at.button if b.label == "Valider"][0].click().run()
-        self.assertFalse(at.exception)
-        reg = traces.lire(traces.REGISTRE)
-        self.assertEqual(reg.iloc[-1][["element", "decision", "nom"]].tolist(),
-                         [rapport.ELEMENT_EXPORT, "Valider", "Awa Diop"])
-        self.assertRegex(reg.iloc[-1]["horodatage_utc"], r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$")
+        self.assertFalse([w for w in at.warning if "validation" in w.value])  # plus de cadre de validation
+        self.assertFalse([b for b in at.button if b.label in ("Valider", "Rejeter", "Commenter")])
         [b for b in at.button if b.label.startswith("Préparer")][0].click().run()
         self.assertFalse(at.exception)
         nom_xlsx, nom_pdf = rapport.nom_fichiers()
@@ -708,10 +700,6 @@ class InterfaceAgentUnique(unittest.TestCase):
         self.assertIn(nom_pdf, labels)
         relecture = [e.label for e in at.expander if e.label.startswith("Relecture")]
         self.assertEqual(relecture, ["Relecture avant livraison : contrôles réussis"])
-        [b for b in at.button if b.label == "Rejeter"][0].click().run()  # le rejet reverrouille
-        labels = [b.proto.label for b in at.get("download_button")]
-        self.assertNotIn(nom_xlsx, labels)
-        self.assertIn("Aucun export Excel ou PDF avant validation", at.warning[0].value)
 
     def test_agent_injoignable_secours_local(self):
         at = self.app()  # pas de secret : agent non configuré

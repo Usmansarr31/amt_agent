@@ -56,9 +56,7 @@ Utilisation
   colonnes date, aerodrome, type_mouvement, nombre_mouvements en en-tête ; pas de PDF scanné). XML et PDF sont
   nettoyés avec exactement les mêmes règles que le CSV. Un PDF de 60 pages prend ~20 s.
   Rapport AMT (onglet Exports), au format des livrables de l'agent, sur tout le fichier :
-    - verrou : aucun export Excel ou PDF avant validation. Nom de l'expert puis Valider / Rejeter / Commenter ;
-      décision au registre (date et heure UTC, nom). Rejeter ou Commenter reverrouille ; nouveau fichier = nouvelle
-      validation. Puis « Préparer le rapport (Excel et PDF) ».
+    - bouton « Préparer le rapport (Excel et PDF) » ; mêmes fichiers dans le menu « Exporter » du chat.
     - Rapport_AMT_<date>.xlsx : feuille « Tableau de bord » (bandeau, filtres Période / Aérodrome / Catégorie,
       5 cartes, ligne du mois incomplet, 7 graphiques ; cartes et graphiques 1 à 6 recalculés par SUMIFS selon les
       filtres), feuille masquée « _calcul », une feuille par fichier source (données nettoyées, en-têtes en
@@ -79,7 +77,7 @@ Traçabilité et validation
   Chaque décision de l'expert (page Anomalies) et chaque question posée à l'assistant (page Discuter) est
   enregistrée dans traces/, avec l'horodatage, le nom du fichier et son empreinte SHA-256 : elle survit au
   rechargement de la page et reste liée à la version exacte des données.
-  Le registre (décisions sur les anomalies et sur l'export, nom déclaré, heure UTC) figure en dernière page du
+  Le registre (décisions sur les anomalies, nom déclaré, heure UTC) figure en dernière page du
   PDF du rapport. Pour une démonstration propre, vider ou renommer le dossier traces/ avant de commencer.
   Variable AMT_TRACES_DIR : autre emplacement pour ce dossier.
 
@@ -104,7 +102,7 @@ Discuter avec l'agent AMT (page Discuter)
   (barre latérale) en ouvre une autre.
   Agent injoignable (secret absent ou refusé, réseau, délai dépassé) : message clair et bouton discret
   « Voir la réponse calculée localement » (secours : calcul sur le jeu de données nettoyé, voir ci-dessous).
-  Bouton « Exporter » (en haut de la discussion) : discussion (Markdown), rapport Excel et PDF (après validation), données
+  Bouton « Exporter » (en haut de la discussion) : discussion (Markdown), rapport Excel et PDF, données
   nettoyées (CSV). Fichiers joints par l'agent (attachments : contentUrl ou content) : récupérés dès la
   réponse, un bouton de téléchargement par fichier (jeton Direct Line envoyé seulement à Direct Line, jamais
   affiché ni journalisé ; 20 Mo au plus ; cartes non affichées). Liens sandbox:/app/... (inaccessibles au

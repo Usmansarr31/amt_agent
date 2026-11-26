@@ -187,38 +187,16 @@ def section_qualite():
     st.caption("Le total brut additionne toutes les lignes du fichier, doublons et valeurs négatives compris. Il n'est jamais présenté comme correct.")
 
 
-def validation_export():
-    """Dernière décision de l'expert sur l'export, pour ce fichier : {"nom", "horodatage_utc"} si « Valider »,
-    sinon None. Un nouveau fichier (autre empreinte) n'a pas de validation : elle tombe."""
-    reg = registre()
-    r = reg[reg["element"] == rapport.ELEMENT_EXPORT] if not reg.empty else reg
-    if r.empty or r.iloc[-1]["decision"] != "Valider":
-        return None
-    der = r.iloc[-1]
-    nom_v = der.get("nom")
-    return {"nom": nom_v if isinstance(nom_v, str) else "",
-            "horodatage_utc": der.get("horodatage_utc") if isinstance(der.get("horodatage_utc"), str) else der["horodatage"]}
-
-
 def analyse_courante():
     return rapport.analyser(df, journal, mois_info, meta, os.path.basename(nom), emp, rapport.sources_excel(contenu, nom))
 
 
-def rapport_excel(validation):
-    return rapport.construire_excel(analyse_courante(), registre(), validation)
+def rapport_excel():
+    return rapport.construire_excel(analyse_courante(), registre())
 
 
-def rapport_pdf(validation):
-    return rapport.construire_pdf(analyse_courante(), registre(), validation)
-
-
-def enregistrer_validation_export(decision):
-    nom_expert = (st.session_state.get("export_nom") or "").strip()
-    commentaire = (st.session_state.get("export_commentaire") or "").strip()
-    traces.ajouter(traces.REGISTRE, {"fichier": os.path.basename(nom), "empreinte": emp,
-                                     "element": rapport.ELEMENT_EXPORT, "decision": decision,
-                                     "commentaire": commentaire, "nom": nom_expert})
-    st.session_state.message_export = decision
+def rapport_pdf():
+    return rapport.construire_pdf(analyse_courante(), registre())
 
 
 ICONES_CONTROLE = {True: ":green[:material/check_circle:]", False: ":red[:material/cancel:]",
@@ -229,59 +207,31 @@ def section_exports():
     st.write("Rapport complet au format des livrables de l'agent AMT : Excel (tableau de bord à filtres, formules, "
              "données nettoyées) et PDF (tableau de bord, analyse, registre). Il porte sur tout le fichier, sans les "
              "filtres de la barre latérale.")
-    val = validation_export()
-    with st.container(border=True):
-        st.markdown("**Validation de l'expert métier**")
-        message = st.session_state.pop("message_export", None)
-        if message == "Valider":
-            st.success("Décision enregistrée au registre : exports Excel et PDF déverrouillés.")
-        elif message:
-            st.info(f"Décision « {message} » enregistrée au registre. Elle a été prise en compte : revoyez "
-                    "l'analyse puis redemandez la validation. Les exports restent verrouillés.")
-        if val:
-            qui = f" par **{val['nom']}**" if val["nom"] else ""
-            st.caption(f":material/verified: Validé{qui} le {val['horodatage_utc']} UTC, pour ce fichier "
-                       f"(empreinte `{emp}`). Un nouveau fichier demandera une nouvelle validation.")
-        else:
-            st.warning("Aucun export Excel ou PDF avant validation. Validation de l'expert métier requise : "
-                       "Valider / Rejeter / Commenter ?", icon=":material/lock:")
-        with st.container(horizontal=True, vertical_alignment="bottom"):
-            st.text_input("Nom de l'expert", key="export_nom", placeholder="Prénom Nom")
-            st.text_input("Commentaire", key="export_commentaire")
-        with st.container(horizontal=True):
-            st.button("Valider", type="primary", icon=":material/check:", on_click=enregistrer_validation_export,
-                      args=("Valider",))
-            st.button("Rejeter", icon=":material/close:", on_click=enregistrer_validation_export, args=("Rejeter",))
-            st.button("Commenter", icon=":material/comment:", on_click=enregistrer_validation_export,
-                      args=("Commenter",))
-        st.caption("Chaque décision est enregistrée au registre (date et heure UTC, nom déclaré) et figure en "
-                   "dernière page du PDF. Elle ne modifie jamais les données d'origine.")
     nom_xlsx, nom_pdf = rapport.nom_fichiers()
-    if val:
-        cle = (emp, val["horodatage_utc"], len(registre()))
-        pret = st.session_state.get("rapport_pret")
-        if not pret or pret["cle"] != cle:
-            if st.button("Préparer le rapport (Excel et PDF)", type="primary", icon=":material/description:"):
-                with st.spinner("Construction et relecture du rapport..."):
-                    A = analyse_courante()
-                    reg = registre()
-                    x = rapport.construire_excel(A, reg, val)
-                    p = rapport.construire_pdf(A, reg, val)
-                    st.session_state.rapport_pret = {"cle": cle, "xlsx": x, "pdf": p,
-                                                     "controles": rapport.relire(A, x, p)}
-                st.rerun()
-        else:
-            with st.container(horizontal=True):
-                st.download_button(nom_xlsx, pret["xlsx"], nom_xlsx,
-                                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                   icon=":material/table_view:", on_click="ignore", type="primary")
-                st.download_button(nom_pdf, pret["pdf"], nom_pdf, "application/pdf",
-                                   icon=":material/picture_as_pdf:", on_click="ignore", type="primary")
-            echecs = [c for c in pret["controles"] if c[1] is False]
-            with st.expander("Relecture avant livraison" + (" : contrôle en échec" if echecs else " : contrôles réussis"),
-                             icon=":material/fact_check:", expanded=bool(echecs)):
-                for nom_c, ok, detail in pret["controles"]:
-                    st.markdown(f"{ICONES_CONTROLE[ok]} {nom_c} : {detail}")
+    cle = (emp, len(registre()))
+    pret = st.session_state.get("rapport_pret")
+    if not pret or pret["cle"] != cle:
+        if st.button("Préparer le rapport (Excel et PDF)", type="primary", icon=":material/description:"):
+            with st.spinner("Construction et relecture du rapport..."):
+                A = analyse_courante()
+                reg = registre()
+                x = rapport.construire_excel(A, reg)
+                p = rapport.construire_pdf(A, reg)
+                st.session_state.rapport_pret = {"cle": cle, "xlsx": x, "pdf": p,
+                                                 "controles": rapport.relire(A, x, p)}
+            st.rerun()
+    else:
+        with st.container(horizontal=True):
+            st.download_button(nom_xlsx, pret["xlsx"], nom_xlsx,
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               icon=":material/table_view:", on_click="ignore", type="primary")
+            st.download_button(nom_pdf, pret["pdf"], nom_pdf, "application/pdf",
+                               icon=":material/picture_as_pdf:", on_click="ignore", type="primary")
+        echecs = [c for c in pret["controles"] if c[1] is False]
+        with st.expander("Relecture avant livraison" + (" : contrôle en échec" if echecs else " : contrôles réussis"),
+                         icon=":material/fact_check:", expanded=bool(echecs)):
+            for nom_c, ok, detail in pret["controles"]:
+                st.markdown(f"{ICONES_CONTROLE[ok]} {nom_c} : {detail}")
     st.download_button("Données nettoyées (CSV)", df.drop(columns=["statut"]).to_csv(index=False).encode("utf-8-sig"),
                        "trafic_nettoye.csv", "text/csv", icon=":material/download:", on_click="ignore")
 
@@ -595,16 +545,12 @@ def menu_export():
                            "text/markdown", icon=":material/chat:", width="stretch", on_click="ignore",
                            disabled=not st.session_state.chat)
         if df is not None:
-            val = validation_export()
             nom_xlsx, nom_pdf = rapport.nom_fichiers()
-            st.download_button(f"Rapport Excel ({nom_xlsx})", lambda: rapport_excel(val), nom_xlsx,
+            st.download_button(f"Rapport Excel ({nom_xlsx})", rapport_excel, nom_xlsx,
                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               icon=":material/table_view:", width="stretch", on_click="ignore", disabled=not val)
-            st.download_button(f"Rapport PDF ({nom_pdf})", lambda: rapport_pdf(val), nom_pdf, "application/pdf",
-                               icon=":material/picture_as_pdf:", width="stretch", on_click="ignore", disabled=not val)
-            if not val:
-                st.caption(":material/lock: Rapports verrouillés : validation de l'expert requise (Tableau de bord, "
-                           "onglet Exports).")
+                               icon=":material/table_view:", width="stretch", on_click="ignore")
+            st.download_button(f"Rapport PDF ({nom_pdf})", rapport_pdf, nom_pdf, "application/pdf",
+                               icon=":material/picture_as_pdf:", width="stretch", on_click="ignore")
             st.download_button("Données nettoyées (CSV)",
                                lambda: df.drop(columns=["statut"]).to_csv(index=False).encode("utf-8-sig"),
                                "trafic_nettoye.csv", "text/csv", icon=":material/dataset:", width="stretch",
