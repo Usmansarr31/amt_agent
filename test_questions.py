@@ -588,18 +588,45 @@ class InterfaceAgentUnique(unittest.TestCase):
                                                       "Qualité des données", "Traçabilité", "Exports"])
 
     def test_fichier_joint_dans_le_chat(self):
+        import faux_copilot
         os.environ["COPILOT_DIRECTLINE_SECRET"] = "faux-secret-de-test"
         os.environ["COPILOT_DIRECTLINE_URL"] = f"http://127.0.0.1:{self.serveur.server_address[1]}"
         at = self.app()
         self.aller(at, "discuter")
         self.assertTrue(at.chat_input[0].proto.accept_file)
-        csv = ("date,aerodrome,mouvements\n2025-01-01,DAK,10\n2025-01-02,DAK,12\n").encode()
-        at.chat_input[0].upload("mini.csv", csv, "text/csv").set_value("Total ?").run()
+        # même fichier que celui de l'agent : envoyé à l'agent, libellé « identique »
+        orga = Path(ORGA).read_bytes()
+        del faux_copilot.RECUS[:]
+        at.chat_input[0].upload(Path(ORGA).name, orga).set_value("analyse le fichier").run()
         self.assertFalse(at.exception)
-        self.assertIn("mini.csv", at.sidebar.caption[0].value)
+        self.assertFalse(at.error)
+        self.assertIn("identique à celui de l'agent", at.sidebar.caption[0].value)
+        recu = faux_copilot.RECUS[-1]
+        self.assertEqual(recu["text"], "analyse le fichier")
+        self.assertEqual(recu["fichier_recu"], {"nom": Path(ORGA).name, "taille": len(orga)})  # octets intacts
+        self.assertIn("Fichier reçu par le faux serveur", at.session_state.chat[-1]["content"])
+        self.assertTrue(any("envoyé à l'agent et repris" in c.value for c in at.caption))
+        self.assertFalse(faux_copilot.SECRET in str(at.session_state.chat))
+        # fichier illisible localement : envoyé à l'agent, pas d'erreur rouge, le tableau de bord ne change pas
+        illisible = ("date,aerodrome,mouvements\n2025-01-01,DAK,10\n").encode()
+        at.chat_input[0].upload("autre.csv", illisible, "text/csv").set_value("Total ?").run()
+        self.assertFalse(at.exception)
+        self.assertFalse(at.error)
+        self.assertIn("identique à celui de l'agent", at.sidebar.caption[0].value)
+        self.assertTrue(any("autre.csv : envoyé à l'agent. Non repris" in c.value for c in at.caption))
+        self.assertEqual(faux_copilot.RECUS[-1]["fichier_recu"]["nom"], "autre.csv")
+        # fichier valide différent : il remplace le jeu de données du tableau de bord (nouvelle conversation)
+        classeur = __import__("openpyxl").load_workbook(io.BytesIO(orga))
+        tampon = io.BytesIO(); classeur.properties.title = "copie"; classeur.save(tampon)
+        at.chat_input[0].upload("copie.xlsx", tampon.getvalue()).run()  # sans texte : question par défaut
+        self.assertFalse(at.exception)
+        self.assertIn("copie.xlsx", at.sidebar.caption[0].value)
         self.assertIn("remplacé", at.sidebar.caption[0].value)
-        envoyees = [m["content"] for m in at.session_state.chat if m["role"] == "user"]
-        self.assertEqual(envoyees, ["Total ?"])  # seule la question part, jamais le fichier
+        self.assertEqual([m["content"] for m in at.session_state.chat if m["role"] == "user"],
+                         ["Analyse le fichier joint."])
+        # question sans fichier : rien d'autre que la question ne part
+        at.chat_input[0].set_value("Et en février ?").run()
+        self.assertNotIn("fichier_recu", faux_copilot.RECUS[-1])
         retour = [b for b in at.sidebar.button if b.proto.label == "Revenir au jeu de l'agent"]
         self.assertEqual(len(retour), 1)
         retour[0].click().run()

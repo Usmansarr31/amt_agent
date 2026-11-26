@@ -307,35 +307,42 @@ def repondre_local(question, lg):
 
 def poser():
     """La question part à l'agent ; l'appel réseau se fait dans la page, sous la question, avec l'indicateur.
-    Un fichier joint remplace le jeu de données local (tableau de bord, exports) : il n'est jamais envoyé à
-    l'agent, qui travaille sur son propre fichier."""
+    Un fichier joint par l'utilisateur part à l'agent avec la question (upload Direct Line) ; s'il est lisible,
+    il remplace aussi le jeu de données local (tableau de bord, exports)."""
     saisie = st.session_state.get("chat_saisie")
     fichiers = list(getattr(saisie, "files", None) or [])
     question = (getattr(saisie, "text", saisie) or "").strip()
-    if fichiers:
-        f = fichiers[0]
-        contenu_f = f.getvalue()
-        nouvelle = traces.empreinte(contenu_f)
-        st.session_state.jeu_remplace = {"nom": f.name, "contenu": contenu_f}
-        if nouvelle != st.session_state.get("chat_fichier"):  # nouveau fichier : nouvelle conversation
-            st.session_state.update(chat=[], chat_nouveau=False, chat_fichier=nouvelle, agent_conv=None,
-                                    agent_attente=None)
-        st.toast(f"Jeu de données remplacé par {f.name}. Il n'est pas envoyé à l'agent.",
-                 icon=":material/upload_file:")
+    if not fichiers:
         if question:
             st.session_state.chat.append({"role": "user", "content": question})
             st.session_state.agent_attente = {"question": question, "langue": questions.langue_de(question),
-                                              "fichier": f.name, "empreinte": nouvelle}
+                                              "fichier": nom, "empreinte": emp}
         return
-    if not question:
-        return
-    st.session_state.chat.append({"role": "user", "content": question})
+    f = fichiers[0]
+    contenu_f = f.getvalue()
+    question = question or "Analyse le fichier joint."
+    envoi = {"nom": f.name, "contenu": contenu_f, "type": f.type or "application/octet-stream"}
+    fichier_local, empreinte_locale = nom, emp
+    try:  # fichier vérifié avant de remplacer le jeu de données : un fichier illisible ne casse rien
+        charger(contenu_f, f.name)
+    except Exception as e:
+        piece = {"nom": f.name, "refus": str(e)}
+    else:
+        nouvelle = traces.empreinte(contenu_f)
+        st.session_state.jeu_remplace = {"nom": f.name, "contenu": contenu_f}
+        if nouvelle != st.session_state.get("chat_fichier"):  # nouveau jeu de données : nouvelle conversation
+            st.session_state.update(chat=[], chat_nouveau=False, chat_fichier=nouvelle, agent_conv=None,
+                                    agent_attente=None)
+        piece = {"nom": f.name}
+        fichier_local, empreinte_locale = f.name, nouvelle
+    st.session_state.chat.append({"role": "user", "content": question, "piece": piece})
     st.session_state.agent_attente = {"question": question, "langue": questions.langue_de(question),
-                                      "fichier": nom, "empreinte": emp}
+                                      "fichier": fichier_local, "empreinte": empreinte_locale, "envoi": envoi}
 
 
 def interroger_agent(attente, sur_etat=None, sur_progression=None):
-    """Envoie la seule question à l'agent Copilot Studio (mode secret Direct Line) et ajoute sa réponse au fil.
+    """Envoie la question (et le fichier joint par l'utilisateur, s'il y en a un) à l'agent Copilot Studio
+    (mode secret Direct Line) et ajoute sa réponse au fil.
     Seuls les liens sandbox: (inaccessibles au navigateur) sont remplacés à l'affichage ; le journal garde la
     réponse originale. Les fichiers joints sont récupérés tout de suite et conservés dans traces/fichiers/.
     Le secret est lu par copilot.py dans l'environnement, jamais ici."""
@@ -353,7 +360,9 @@ def interroger_agent(attente, sur_etat=None, sur_progression=None):
             r = copilot.attendre_reponse(conv, attente["reprise"]["id_envoi"], sur_etat=sur_etat,
                                          sur_progression=sur_progression)
         else:
-            r = copilot.demander(conv, question, sur_etat=sur_etat, sur_progression=sur_progression)
+            envoi = attente.get("envoi")
+            r = copilot.demander(conv, question, sur_etat=sur_etat, sur_progression=sur_progression,
+                                 fichier=(envoi["nom"], envoi["contenu"], envoi["type"]) if envoi else None)
         texte = "\n\n".join(r.textes)
         fichiers = copilot.recuperer_fichiers(conv, r.fichiers)
         references = []
@@ -617,7 +626,7 @@ def page_chat():
             st.title(":primary[:material/flight_takeoff:] Discuter avec l'agent AMT")
             st.caption("Vos questions sont envoyées à l'agent Copilot Studio du projet, qui travaille sur le même "
                        "jeu de données" + (f" ({os.path.basename(nom)})" if nom else "") + ". Seule la question est "
-                       "envoyée ; ses réponses s'affichent telles quelles. Validation de l'expert métier requise.")
+                       "envoyée, avec le fichier que vous joignez (trombone) ; ses réponses s'affichent telles quelles. Validation de l'expert métier requise.")
     else:
         with st.container(key="chat_fil"):
             with st.container(horizontal=True, vertical_alignment="center"):
@@ -629,6 +638,15 @@ def page_chat():
                     with st.container(horizontal=True, horizontal_alignment="right"):
                         with st.container(key=f"bulle_user_{i}", width="content"):
                             st.markdown(msg["content"])
+                    piece = msg.get("piece")
+                    if piece:
+                        with st.container(horizontal=True, horizontal_alignment="right"):
+                            if piece.get("refus"):
+                                st.caption(f":material/attach_file: {piece['nom']} : envoyé à l'agent. Non repris "
+                                           f"dans le tableau de bord ({piece['refus']}).", width="content")
+                            else:
+                                st.caption(f":material/attach_file: {piece['nom']} : envoyé à l'agent et repris "
+                                           "dans le tableau de bord.", width="content")
                 else:
                     with st.container(key=f"reponse_{i}"):
                         if i == dernier and st.session_state.chat_nouveau:
@@ -764,6 +782,8 @@ defaut = fichier_par_defaut()
 nom, contenu, origine = None, None, None
 if fichier is not None:
     nom, contenu, origine = fichier["nom"], fichier["contenu"], "remplace"
+    if defaut is not None and contenu == defaut.read_bytes():  # même fichier que celui de l'agent
+        origine = "defaut"
     memoriser_octets(nom, contenu)
 elif defaut is not None:
     nom, contenu, origine = defaut.name, defaut.read_bytes(), "defaut"

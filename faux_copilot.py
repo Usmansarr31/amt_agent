@@ -97,7 +97,32 @@ class Gestionnaire(BaseHTTPRequestHandler):
     def do_POST(self):
         u = urlparse(self.path)
         longueur = int(self.headers.get("Content-Length") or 0)
-        corps = json.loads(self.rfile.read(longueur) or b"{}")
+        brut = self.rfile.read(longueur)
+        m = re.fullmatch(r"/v3/directline/conversations/([^/]+)/upload", u.path)
+        if m and m.group(1) in CONVERSATIONS:  # upload Direct Line : activité (JSON) + fichier en multipart
+            if not self._autorise():
+                return self._json(403, {"error": "jeton"})
+            limite = self.headers.get("Content-Type", "").split("boundary=")[-1].encode()
+            activite, fichier = {}, None
+            for partie in brut.split(b"--" + limite)[1:-1]:
+                entete, _, donnees = partie.strip(b"\r\n").partition(b"\r\n\r\n")
+                if b'name="activity"' in entete:
+                    activite = json.loads(donnees)
+                elif b'name="file"' in entete:
+                    nom_f = re.search(rb'filename="([^"]*)"', entete).group(1).decode()
+                    fichier = {"nom": nom_f, "taille": len(donnees)}
+            ident = "act-" + uuid.uuid4().hex[:8]
+            with VERROU:
+                RECUS.append({**activite, "fichier_recu": fichier})
+            conv = m.group(1)
+            _ajouter(conv, {**activite, "id": ident}, 0)
+            bot = {"id": "agent", "name": "Agent AMT (faux serveur)"}
+            _ajouter(conv, {"type": "message", "from": bot, "replyToId": ident,
+                            "text": f"**Fichier reçu par le faux serveur** : {fichier['nom']} ({fichier['taille']} "
+                                    f"octets), question : « {activite.get('text', '')} »"}, 0.3)
+            _ajouter(conv, {"type": "event", "from": bot, "replyToId": ident, "text": "", "name": "fin"}, 0.4)
+            return self._json(200, {"id": ident})
+        corps = json.loads(brut or b"{}")
         if u.path == "/v3/directline/conversations":
             if not self._autorise():
                 return self._json(403, {"error": "jeton"})

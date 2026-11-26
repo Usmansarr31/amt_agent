@@ -60,7 +60,8 @@ Utilisation
     « Jeu de données : <fichier>, identique à celui de l'agent », période du fichier, filtres (aérodromes, période,
     catégorie de vol, origine / destination).
     Pour remplacer le jeu de données : trombone de la zone de saisie (page Discuter), CSV, Excel, XML ou PDF.
-    Le fichier sert au tableau de bord et aux exports, jamais envoyé à l'agent ; le libellé indique alors
+    Le fichier part à l'agent avec la question (4 Mo au plus) ; s'il est lisible, il sert aussi au tableau de
+    bord et aux exports, et le libellé indique alors
     « remplacé : différent de celui de l'agent ». Bouton « Revenir au jeu de l'agent » pour annuler.
     Sans AMT_DEFAULT_FILE, le dernier fichier joint dans Discuter est réutilisé (dossier dernier_fichier/).
   Formats : XML (un enregistrement par élément, champs en sous-éléments ou attributs) ; PDF (tableaux avec les
@@ -100,7 +101,7 @@ Commentaire de tendance
 
 Discuter avec l'agent AMT (page Discuter)
   Le chat parle uniquement à l'agent Copilot Studio, par l'API Direct Line en mode secret. Seule la question est
-  envoyée (jamais les données du fichier) ; la réponse de l'agent s'affiche telle quelle.
+  envoyée, plus le fichier joint par l'utilisateur avec le trombone ; la réponse de l'agent s'affiche telle quelle.
   Séquence : jeton (POST https://directline.botframework.com/v3/directline/tokens/generate avec le secret) ->
   conversation -> envoi de la question -> lecture des activités toutes les 2 s (watermark), 180 s au maximum
   (variable AMT_AGENT_DELAI, entre 30 et 600 s).

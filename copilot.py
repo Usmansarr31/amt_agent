@@ -12,7 +12,8 @@ Le secret n'est lu que dans l'environnement, au moment de l'appel : il n'est jam
 jamais conservé (ni dans la conversation, ni dans la session Streamlit), jamais écrit dans un fichier, un journal,
 une trace ou un message d'erreur, et jamais affiché.
 
-Seule la question de l'utilisateur est envoyée : aucune donnée du fichier ne quitte l'application.
+Seule la question de l'utilisateur est envoyée, plus le fichier que l'utilisateur joint lui-même dans la
+discussion (upload Direct Line) ; aucune autre donnée ne quitte l'application.
 Toutes les erreurs sont converties en ErreurAgent, avec un message clair en français.
 """
 import base64
@@ -154,12 +155,14 @@ def mode_secret():
     return VAR_SECRET in os.environ
 
 
-def _requete(methode, url, jeton=None, corps=None, refus=None, delai=DELAI_REQUETE):
+def _requete(methode, url, jeton=None, corps=None, refus=None, delai=DELAI_REQUETE, multipart=None):
     entetes = {"Accept": "application/json"}
     donnees = None
     if jeton:
         entetes["Authorization"] = f"Bearer {jeton}"
-    if corps is not None:
+    if multipart is not None:  # (octets, type de contenu) déjà assemblés
+        donnees, entetes["Content-Type"] = multipart
+    elif corps is not None:
         donnees = json.dumps(corps).encode("utf-8")
         entetes["Content-Type"] = "application/json"
     elif methode == "POST":
@@ -380,9 +383,29 @@ def _rafraichir(conv):
         conv.obtenu_le = time.time()
 
 
+TAILLE_MAX_ENVOI = 4 * 1024 * 1024   # octets : fichier joint par l'utilisateur (limite des pièces jointes Direct Line)
+
+
+def _multipart(activite, nom, contenu, type_):
+    """Corps multipart/form-data de l'upload Direct Line : l'activité (JSON) puis le fichier."""
+    limite = "----amt" + os.urandom(12).hex()
+    nom = nom_sur(nom).replace('"', "")
+    morceaux = [
+        f'--{limite}\r\nContent-Disposition: form-data; name="activity"; filename="blob"\r\n'
+        "Content-Type: application/vnd.microsoft.activity\r\n\r\n".encode(),
+        json.dumps(activite).encode("utf-8"),
+        f'\r\n--{limite}\r\nContent-Disposition: form-data; name="file"; filename="{nom}"\r\n'
+        f"Content-Type: {type_ or 'application/octet-stream'}\r\n\r\n".encode(),
+        contenu,
+        f"\r\n--{limite}--\r\n".encode(),
+    ]
+    return b"".join(morceaux), f"multipart/form-data; boundary={limite}"
+
+
 def demander(conv, question, delai_max=None, intervalle=INTERVALLE, silence_fin=SILENCE_FIN,
-             delai_lecture=DELAI_LECTURE, sur_etat=None, sur_progression=None):
-    """Envoie la question (et rien d'autre) puis lit les activités (watermark) toutes les `intervalle` secondes,
+             delai_lecture=DELAI_LECTURE, sur_etat=None, sur_progression=None, fichier=None):
+    """Envoie la question, avec le fichier joint par l'utilisateur s'il y en a un
+    (`fichier` = (nom, octets, type) ; upload Direct Line), puis lit les activités (watermark) toutes les `intervalle` secondes,
     pendant `delai_max` secondes au plus.
 
     Réponse complète : un message de l'agent suivi d'une activité « event » ; ou, une fois un message reçu,
@@ -394,10 +417,20 @@ def demander(conv, question, delai_max=None, intervalle=INTERVALLE, silence_fin=
     _rafraichir(conv)
     url_act = f"{conv.base}/conversations/{urllib.parse.quote(conv.id)}/activities"
     id_envoi = None
+    activite = {"type": "message", "from": {"id": conv.utilisateur, "name": "Expert"}, "locale": "fr-FR",
+                "text": question}
     try:
-        envoi = _requete("POST", url_act, conv.jeton, {
-            "type": "message", "from": {"id": conv.utilisateur, "name": "Expert"},
-            "locale": "fr-FR", "text": question}, delai=delai_lecture)
+        if fichier is not None:
+            nom, contenu, type_ = fichier
+            if len(contenu) > TAILLE_MAX_ENVOI:
+                raise ErreurAgent(f"Fichier trop volumineux pour l'agent ({len(contenu) / 1048576:.1f} Mo ; "
+                                  f"maximum {TAILLE_MAX_ENVOI // 1048576} Mo).")
+            url_envoi = (f"{conv.base}/conversations/{urllib.parse.quote(conv.id)}/upload?"
+                         + urllib.parse.urlencode({"userId": conv.utilisateur}))
+            envoi = _requete("POST", url_envoi, conv.jeton, delai=delai_lecture,
+                             multipart=_multipart(activite, nom, contenu, type_))
+        else:
+            envoi = _requete("POST", url_act, conv.jeton, activite, delai=delai_lecture)
         id_envoi = envoi.get("id")
     except DelaiReseau:
         pass  # l'envoi a pu aboutir alors que l'accusé de réception tarde : on lit les activités
