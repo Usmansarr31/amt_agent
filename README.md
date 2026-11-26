@@ -125,7 +125,7 @@ streamlit run app.py
 > **Le secret ne doit jamais être écrit dans un fichier ni versionné.**
 > L'application le lit uniquement dans l'environnement. Elle ne l'affiche pas et ne l'écrit dans aucun journal, aucune trace et aucun message d'erreur.
 
-Pour remplacer le jeu de données pendant une session, joignez un fichier (CSV, Excel, XML ou PDF) avec le trombone de la zone de saisie, dans la page **Discuter**. Le fichier part à l'agent avec la question (pièce jointe Direct Line, 4 Mo au plus). S'il a la structure attendue, il remplace aussi le jeu de données du tableau de bord et des exports ; sinon, le tableau de bord ne change pas. Le bouton **Revenir au jeu de l'agent**, dans la barre latérale, annule le remplacement.
+Pour remplacer le jeu de données pendant une session, joignez un ou plusieurs fichiers (CSV, Excel, XML ou PDF ; 5 au plus, 4 Mo chacun) avec le trombone de la zone de saisie, dans la page **Discuter**. Les fichiers partent à l'agent avec la question (pièces jointes Direct Line). Le premier qui a la structure attendue remplace aussi le jeu de données du tableau de bord et des exports ; si aucun ne l'a, le tableau de bord ne change pas. Le bouton **Revenir au jeu de l'agent**, dans la barre latérale, annule le remplacement.
 
 ## Déploiement sur Streamlit Community Cloud
 
@@ -161,7 +161,7 @@ Voici ce qui se passe quand l'utilisateur pose une question :
 3. Elle envoie la question.
 4. Elle lit les réponses toutes les 2 secondes, pendant 180 secondes au plus (réglable avec `AMT_AGENT_DELAI`). Le temps d'attente s'affiche au bout de 10 secondes.
 
-Seule la question est envoyée, plus le fichier que l'utilisateur joint lui-même avec le trombone ; aucune autre donnée du jeu de données ne part. La réponse de l'agent s'affiche telle quelle.
+Seule la question est envoyée, plus les fichiers que l'utilisateur joint lui-même avec le trombone (5 au plus) ; aucune autre donnée du jeu de données ne part. La réponse de l'agent s'affiche telle quelle.
 
 La réponse est considérée comme complète dans l'un de ces deux cas :
 

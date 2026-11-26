@@ -307,8 +307,8 @@ def repondre_local(question, lg):
 
 def poser():
     """La question part à l'agent ; l'appel réseau se fait dans la page, sous la question, avec l'indicateur.
-    Un fichier joint par l'utilisateur part à l'agent avec la question (upload Direct Line) ; s'il est lisible,
-    il remplace aussi le jeu de données local (tableau de bord, exports)."""
+    Les fichiers joints par l'utilisateur (5 au plus) partent à l'agent avec la question (upload Direct Line) ;
+    le premier fichier lisible remplace aussi le jeu de données local (tableau de bord, exports)."""
     saisie = st.session_state.get("chat_saisie")
     fichiers = list(getattr(saisie, "files", None) or [])
     question = (getattr(saisie, "text", saisie) or "").strip()
@@ -318,26 +318,31 @@ def poser():
             st.session_state.agent_attente = {"question": question, "langue": questions.langue_de(question),
                                               "fichier": nom, "empreinte": emp}
         return
-    f = fichiers[0]
-    contenu_f = f.getvalue()
-    question = question or "Analyse le fichier joint."
-    envoi = {"nom": f.name, "contenu": contenu_f, "type": f.type or "application/octet-stream"}
-    fichier_local, empreinte_locale = nom, emp
-    try:  # fichier vérifié avant de remplacer le jeu de données : un fichier illisible ne casse rien
-        charger(contenu_f, f.name)
-    except Exception as e:
-        piece = {"nom": f.name, "refus": str(e)}
-    else:
-        nouvelle = traces.empreinte(contenu_f)
-        st.session_state.jeu_remplace = {"nom": f.name, "contenu": contenu_f}
+    ignores = [f.name for f in fichiers[copilot.MAX_FICHIERS_ENVOI:]]
+    fichiers = fichiers[:copilot.MAX_FICHIERS_ENVOI]
+    question = question or ("Analyse le fichier joint." if len(fichiers) == 1 else "Analyse les fichiers joints.")
+    envois = [{"nom": f.name, "contenu": f.getvalue(), "type": f.type or "application/octet-stream"}
+              for f in fichiers]
+    fichier_local, empreinte_locale, refus, choisi = nom, emp, [], None
+    for e in envois:  # vérifiés dans l'ordre : le premier lisible devient le jeu de données local
+        try:
+            charger(e["contenu"], e["nom"])
+        except Exception as err:  # un fichier illisible ne casse rien
+            refus.append({"nom": e["nom"], "raison": str(err)})
+            continue
+        choisi = e
+        break
+    if choisi is not None:
+        nouvelle = traces.empreinte(choisi["contenu"])
+        st.session_state.jeu_remplace = {"nom": choisi["nom"], "contenu": choisi["contenu"]}
         if nouvelle != st.session_state.get("chat_fichier"):  # nouveau jeu de données : nouvelle conversation
             st.session_state.update(chat=[], chat_nouveau=False, chat_fichier=nouvelle, agent_conv=None,
                                     agent_attente=None)
-        piece = {"nom": f.name}
-        fichier_local, empreinte_locale = f.name, nouvelle
-    st.session_state.chat.append({"role": "user", "content": question, "piece": piece})
+        fichier_local, empreinte_locale = choisi["nom"], nouvelle
+    st.session_state.chat.append({"role": "user", "content": question,
+                                  "piece": {"refus": refus, "ignores": ignores, "aucun_lisible": choisi is None}})
     st.session_state.agent_attente = {"question": question, "langue": questions.langue_de(question),
-                                      "fichier": fichier_local, "empreinte": empreinte_locale, "envoi": envoi}
+                                      "fichier": fichier_local, "empreinte": empreinte_locale, "envois": envois}
 
 
 def interroger_agent(attente, sur_etat=None, sur_progression=None):
@@ -360,9 +365,9 @@ def interroger_agent(attente, sur_etat=None, sur_progression=None):
             r = copilot.attendre_reponse(conv, attente["reprise"]["id_envoi"], sur_etat=sur_etat,
                                          sur_progression=sur_progression)
         else:
-            envoi = attente.get("envoi")
+            envois = attente.get("envois") or []
             r = copilot.demander(conv, question, sur_etat=sur_etat, sur_progression=sur_progression,
-                                 fichier=(envoi["nom"], envoi["contenu"], envoi["type"]) if envoi else None)
+                                 fichiers=[(e["nom"], e["contenu"], e["type"]) for e in envois])
         texte = "\n\n".join(r.textes)
         fichiers = copilot.recuperer_fichiers(conv, r.fichiers)
         references = []
@@ -626,7 +631,7 @@ def page_chat():
             st.title(":primary[:material/flight_takeoff:] Discuter avec l'agent AMT")
             st.caption("Vos questions sont envoyées à l'agent Copilot Studio du projet, qui travaille sur le même "
                        "jeu de données" + (f" ({os.path.basename(nom)})" if nom else "") + ". Seule la question est "
-                       "envoyée, avec le fichier que vous joignez (trombone) ; ses réponses s'affichent telles quelles. Validation de l'expert métier requise.")
+                       "envoyée, avec les fichiers que vous joignez (trombone, 5 au plus) ; ses réponses s'affichent telles quelles. Validation de l'expert métier requise.")
     else:
         with st.container(key="chat_fil"):
             with st.container(horizontal=True, vertical_alignment="center"):
@@ -638,11 +643,17 @@ def page_chat():
                     with st.container(horizontal=True, horizontal_alignment="right"):
                         with st.container(key=f"bulle_user_{i}", width="content"):
                             st.markdown(msg["content"])
-                    piece = msg.get("piece")
-                    if piece and piece.get("refus"):  # seul le cas où le tableau de bord ne change pas est signalé
+                    piece = msg.get("piece") or {}
+                    notes = []  # seuls les cas particuliers sont signalés
+                    if piece.get("ignores"):
+                        notes.append(f"Non envoyés (maximum {copilot.MAX_FICHIERS_ENVOI} fichiers) : "
+                                     + ", ".join(piece["ignores"]) + ".")
+                    if piece.get("aucun_lisible"):
+                        notes += [f"{r['nom']} : envoyé à l'agent. Non repris dans le tableau de bord "
+                                  f"({r['raison']})." for r in piece.get("refus", [])]
+                    for note in notes:
                         with st.container(horizontal=True, horizontal_alignment="right"):
-                            st.caption(f":material/attach_file: {piece['nom']} : envoyé à l'agent. Non repris "
-                                       f"dans le tableau de bord ({piece['refus']}).", width="content")
+                            st.caption(f":material/attach_file: {note}", width="content")
                 else:
                     with st.container(key=f"reponse_{i}"):
                         if i == dernier and st.session_state.chat_nouveau:
@@ -704,7 +715,8 @@ def page_chat():
                 st.session_state.update(agent_attente=None, chat_nouveau=True)
                 st.rerun()
     st.chat_input("Posez votre question à l'agent AMT...", key="chat_saisie", on_submit=poser, max_chars=500,
-                  accept_file=True, file_type=core.FORMATS)
+                  accept_file="multiple", file_type=core.FORMATS,
+                  max_upload_size=copilot.TAILLE_MAX_ENVOI // 1048576)
 
 
 # =====================================================================

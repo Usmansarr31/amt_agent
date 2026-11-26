@@ -594,6 +594,7 @@ class InterfaceAgentUnique(unittest.TestCase):
         at = self.app()
         self.aller(at, "discuter")
         self.assertTrue(at.chat_input[0].proto.accept_file)
+        self.assertEqual(at.chat_input[0].proto.max_upload_size_mb, 4)
         # même fichier que celui de l'agent : envoyé à l'agent, libellé « identique »
         orga = Path(ORGA).read_bytes()
         del faux_copilot.RECUS[:]
@@ -603,7 +604,7 @@ class InterfaceAgentUnique(unittest.TestCase):
         self.assertIn("identique à celui de l'agent", at.sidebar.caption[0].value)
         recu = faux_copilot.RECUS[-1]
         self.assertEqual(recu["text"], "analyse le fichier")
-        self.assertEqual(recu["fichier_recu"], {"nom": Path(ORGA).name, "taille": len(orga)})  # octets intacts
+        self.assertEqual(recu["fichiers_recus"], [{"nom": Path(ORGA).name, "taille": len(orga)}])  # octets intacts
         self.assertIn("Fichier reçu par le faux serveur", at.session_state.chat[-1]["content"])
         self.assertFalse(any("envoyé à l'agent" in c.value for c in at.caption))  # pas de message si tout va bien
         self.assertFalse(faux_copilot.SECRET in str(at.session_state.chat))
@@ -614,7 +615,7 @@ class InterfaceAgentUnique(unittest.TestCase):
         self.assertFalse(at.error)
         self.assertIn("identique à celui de l'agent", at.sidebar.caption[0].value)
         self.assertTrue(any("autre.csv : envoyé à l'agent. Non repris" in c.value for c in at.caption))
-        self.assertEqual(faux_copilot.RECUS[-1]["fichier_recu"]["nom"], "autre.csv")
+        self.assertEqual([f["nom"] for f in faux_copilot.RECUS[-1]["fichiers_recus"]], ["autre.csv"])
         # fichier valide différent : il remplace le jeu de données du tableau de bord (nouvelle conversation)
         classeur = __import__("openpyxl").load_workbook(io.BytesIO(orga))
         tampon = io.BytesIO(); classeur.properties.title = "copie"; classeur.save(tampon)
@@ -624,9 +625,21 @@ class InterfaceAgentUnique(unittest.TestCase):
         self.assertIn("remplacé", at.sidebar.caption[0].value)
         self.assertEqual([m["content"] for m in at.session_state.chat if m["role"] == "user"],
                          ["Analyse le fichier joint."])
+        # plusieurs fichiers : 5 au plus partent à l'agent ; le premier lisible sert au tableau de bord
+        classeur.properties.title = "copie 2"; tampon2 = io.BytesIO(); classeur.save(tampon2)
+        for i in range(6):
+            at.chat_input[0].upload(f"f{i}.xlsx" if i == 2 else f"f{i}.csv",
+                                    tampon2.getvalue() if i == 2 else illisible)
+        at.chat_input[0].set_value("Compare").run()
+        self.assertFalse(at.exception)
+        self.assertFalse(at.error)
+        self.assertEqual([f["nom"] for f in faux_copilot.RECUS[-1]["fichiers_recus"]],
+                         ["f0.csv", "f1.csv", "f2.xlsx", "f3.csv", "f4.csv"])
+        self.assertIn("f2.xlsx", at.sidebar.caption[0].value)
+        self.assertTrue(any("Non envoyés (maximum 5 fichiers) : f5.csv" in c.value for c in at.caption))
         # question sans fichier : rien d'autre que la question ne part
         at.chat_input[0].set_value("Et en février ?").run()
-        self.assertNotIn("fichier_recu", faux_copilot.RECUS[-1])
+        self.assertNotIn("fichiers_recus", faux_copilot.RECUS[-1])
         retour = [b for b in at.sidebar.button if b.proto.label == "Revenir au jeu de l'agent"]
         self.assertEqual(len(retour), 1)
         retour[0].click().run()
