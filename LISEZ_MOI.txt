@@ -9,7 +9,7 @@ Contenu du dossier
   copilot.py         client Direct Line de l'agent Copilot Studio (page Discuter)
   faux_copilot.py    faux serveur Direct Line local pour tester sans l'agent réel
   traces.py          registre de validation et journal de l'assistant, conservés sur disque
-  dernier_fichier/   dernier fichier chargé dans « Avancé » (utilisé seulement sans AMT_DEFAULT_FILE)
+  dernier_fichier/   dernier fichier joint dans Discuter (utilisé seulement sans AMT_DEFAULT_FILE)
   traces/            journaux créés à l'usage (JSON Lines, un enregistrement par ligne, jamais modifié)
   test_questions.py  tests d'acceptation (chiffres de contrôle + questions de contrôle du chat)
   donnees/           fichier de contrôle des organisateurs (la variante piégée n'est pas fournie)
@@ -36,6 +36,16 @@ Lancement (interface unique avec l'agent Copilot Studio)
     ni affiché. Ne pas le mettre dans un script ni dans ce dossier.
   - Facultatif : COPILOT_DIRECTLINE_URL (autre domaine Direct Line, ex. régional).
 
+Déploiement sur Streamlit Community Cloud (pas de .env)
+  share.streamlit.io > Create app : dépôt Usmansarr31/amt_agent, branche main, fichier app.py.
+  Advanced settings : Python 3.12 ; Secrets (format TOML) :
+    COPILOT_DIRECTLINE_SECRET = "le secret Direct Line"
+    AMT_DEFAULT_FILE = "donnees/DONNEES_03_ATM_ANALYSE_TRAFIC.xlsx"
+    AMT_AGENT_DELAI = "180"
+  Modifiable ensuite dans Settings > Secrets. config_env.py recopie ces clés dans l'environnement au démarrage.
+  Sur le Cloud, traces/ est effacé à chaque redémarrage (télécharger journal et registre depuis Traçabilité) et
+  la relecture LibreOffice du rapport indique « non vérifié ».
+
 Utilisation
   Trois pages (barre latérale) :
     Tableau de bord : indicateurs, puis un onglet par thème (seul l'onglet affiché est calculé) : Vue d'ensemble
@@ -49,9 +59,10 @@ Utilisation
   Les filtres de la barre latérale ne s'appliquent qu'au Tableau de bord.
     « Jeu de données : <fichier>, identique à celui de l'agent », période du fichier, filtres (aérodromes, période,
     catégorie de vol, origine / destination).
-    « Avancé » (replié) : remplacer le jeu de données si besoin (CSV, Excel, XML ou PDF) ; le libellé indique alors
-    « remplacé : différent de celui de l'agent ». Retirer le fichier pour revenir à celui de l'agent.
-    Sans AMT_DEFAULT_FILE, le dernier fichier chargé dans « Avancé » est réutilisé (dossier dernier_fichier/).
+    Pour remplacer le jeu de données : trombone de la zone de saisie (page Discuter), CSV, Excel, XML ou PDF.
+    Le fichier sert au tableau de bord et aux exports, jamais envoyé à l'agent ; le libellé indique alors
+    « remplacé : différent de celui de l'agent ». Bouton « Revenir au jeu de l'agent » pour annuler.
+    Sans AMT_DEFAULT_FILE, le dernier fichier joint dans Discuter est réutilisé (dossier dernier_fichier/).
   Formats : XML (un enregistrement par élément, champs en sous-éléments ou attributs) ; PDF (tableaux avec les
   colonnes date, aerodrome, type_mouvement, nombre_mouvements en en-tête ; pas de PDF scanné). XML et PDF sont
   nettoyés avec exactement les mêmes règles que le CSV. Un PDF de 60 pages prend ~20 s.
@@ -128,7 +139,7 @@ Apparence
 Tests
   python test_questions.py
   (autres fichiers : AMT_FICHIER_ORGA=... AMT_FICHIER_PIEGE=... python test_questions.py)
-  Sans le fichier de la variante piégée, ses 35 tests sont ignorés ; les 43 autres doivent passer.
+  Sans le fichier de la variante piégée, ses 35 tests sont ignorés ; les 46 autres doivent passer.
 
 Chiffres de contrôle
   Fichier des organisateurs : total nettoyé 110 229, brut 110 266, 1 anomalie (DAK-SIM, arrivées, 14/08/2025, 290) ;

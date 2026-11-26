@@ -125,7 +125,32 @@ streamlit run app.py
 > **Le secret ne doit jamais être écrit dans un fichier ni versionné.**
 > L'application le lit uniquement dans l'environnement. Elle ne l'affiche pas et ne l'écrit dans aucun journal, aucune trace et aucun message d'erreur.
 
-Pour remplacer le jeu de données pendant une session, ouvrez la section **Avancé**, repliée en bas de la barre latérale.
+Pour remplacer le jeu de données pendant une session, joignez un fichier (CSV, Excel, XML ou PDF) avec le trombone de la zone de saisie, dans la page **Discuter**. Le fichier sert au tableau de bord et aux exports ; il n'est jamais envoyé à l'agent. Le bouton **Revenir au jeu de l'agent**, dans la barre latérale, annule le remplacement.
+
+## Déploiement sur Streamlit Community Cloud
+
+Pas de fichier `.env` : la configuration se saisit dans les **Secrets** de l'application, jamais dans le dépôt.
+
+1. Sur https://share.streamlit.io, cliquez sur **Create app** et choisissez le dépôt `Usmansarr31/amt_agent`, la branche `main` et le fichier principal `app.py`.
+2. Ouvrez **Advanced settings** :
+   - choisissez Python **3.12** ;
+   - collez dans **Secrets** :
+
+   ```toml
+   COPILOT_DIRECTLINE_SECRET = "collez ici le secret Direct Line"
+   AMT_DEFAULT_FILE = "donnees/DONNEES_03_ATM_ANALYSE_TRAFIC.xlsx"
+   AMT_AGENT_DELAI = "180"
+   ```
+
+3. Cliquez sur **Deploy**.
+
+Pour modifier ces valeurs après le déploiement : **Settings > Secrets** de l'application. Au démarrage, l'application recopie ces clés dans l'environnement (`config_env.py`), sans écraser une variable déjà définie. Le secret n'est jamais affiché, journalisé ni écrit.
+
+Points à connaître sur Streamlit Community Cloud :
+
+- **Traçabilité :** le dossier `traces/` (journal, registre, fichiers reçus de l'agent) est effacé à chaque redémarrage de l'application. Téléchargez le journal et le registre depuis l'onglet Traçabilité pour les garder.
+- **Relecture du rapport :** LibreOffice n'est pas installé, donc la ligne « Formules recalculées (LibreOffice) » indique « non vérifié ». Les autres contrôles fonctionnent.
+- **Visibilité :** une application publique est accessible à tous. Dans les paramètres de partage de l'application, vous pouvez la limiter à des personnes invitées.
 
 ## Discussion avec l'agent
 
@@ -177,7 +202,7 @@ AMT_DEFAULT_FILE=donnees/DONNEES_03_ATM_ANALYSE_TRAFIC.xlsx .venv/bin/streamlit 
 .venv/bin/python test_questions.py
 ```
 
-La suite comprend 78 tests d'acceptation. Les 35 tests de la variante piégée ne tournent que si on fournit ce fichier, qui n'est pas dans le dépôt : `AMT_FICHIER_PIEGE=chemin/variante.csv .venv/bin/python test_questions.py`. Sans lui, ils sont ignorés et les 43 autres doivent passer.
+La suite comprend 81 tests d'acceptation. Les 35 tests de la variante piégée ne tournent que si on fournit ce fichier, qui n'est pas dans le dépôt : `AMT_FICHIER_PIEGE=chemin/variante.csv .venv/bin/python test_questions.py`. Sans lui, ils sont ignorés et les 46 autres doivent passer.
 
 Les tests couvrent :
 
@@ -238,6 +263,7 @@ app.py             interface Streamlit (tableau de bord, discussion, navigation)
 core.py            lecture (CSV, Excel, XML, PDF), nettoyage, calculs, commentaire de tendance
 copilot.py         client Direct Line de l'agent Copilot Studio (mode secret)
 questions.py       réponse calculée localement (secours), sans modèle externe
+config_env.py      Secrets de Streamlit Community Cloud recopiés dans l'environnement
 rapport.py         rapport Rapport_AMT : Excel à formules, PDF d'analyse, relecture avant livraison
 traces.py          registre de validation et journal des échanges (JSON Lines)
 faux_copilot.py    faux serveur Direct Line pour les tests

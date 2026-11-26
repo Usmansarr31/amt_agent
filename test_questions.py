@@ -580,13 +580,30 @@ class InterfaceAgentUnique(unittest.TestCase):
         self.assertFalse(at.exception)
         self.assertEqual(at.metric[0].value, "110 229")
         self.assertIn("identique à celui de l'agent", at.sidebar.caption[0].value)
-        avance = at.sidebar.expander[0]
-        self.assertEqual(avance.label, "Avancé")
-        self.assertEqual(len(avance.get("file_uploader")), len(at.sidebar.get("file_uploader")))  # seulement là
+        self.assertFalse(at.sidebar.expander)  # plus de section « Avancé »
+        self.assertFalse(at.get("file_uploader"))  # le fichier se joint dans la zone de saisie du chat
         titres = [v.get("page_name") for v in at._registered_pages.values()]
         self.assertEqual(titres, ["Tableau de bord", "Journal de l'agent", "Discuter"])  # trois sections
         self.assertEqual([t.label for t in at.tabs], ["Vue d'ensemble", "Comparaison", "Retards", "Anomalies",
                                                       "Qualité des données", "Traçabilité", "Exports"])
+
+    def test_fichier_joint_dans_le_chat(self):
+        os.environ["COPILOT_DIRECTLINE_SECRET"] = "faux-secret-de-test"
+        os.environ["COPILOT_DIRECTLINE_URL"] = f"http://127.0.0.1:{self.serveur.server_address[1]}"
+        at = self.app()
+        self.aller(at, "discuter")
+        self.assertTrue(at.chat_input[0].proto.accept_file)
+        csv = ("date,aerodrome,mouvements\n2025-01-01,DAK,10\n2025-01-02,DAK,12\n").encode()
+        at.chat_input[0].upload("mini.csv", csv, "text/csv").set_value("Total ?").run()
+        self.assertFalse(at.exception)
+        self.assertIn("mini.csv", at.sidebar.caption[0].value)
+        self.assertIn("remplacé", at.sidebar.caption[0].value)
+        envoyees = [m["content"] for m in at.session_state.chat if m["role"] == "user"]
+        self.assertEqual(envoyees, ["Total ?"])  # seule la question part, jamais le fichier
+        retour = [b for b in at.sidebar.button if b.proto.label == "Revenir au jeu de l'agent"]
+        self.assertEqual(len(retour), 1)
+        retour[0].click().run()
+        self.assertIn("identique à celui de l'agent", at.sidebar.caption[0].value)
 
     def test_chat_uniquement_agent(self):
         os.environ["COPILOT_DIRECTLINE_SECRET"] = "faux-secret-de-test"
@@ -723,6 +740,37 @@ class InterfaceAgentUnique(unittest.TestCase):
         self.assertEqual(len(bouton), 1)
         bouton[0].click().run()
         self.assertIn("2 139", at.session_state.chat[-1]["content"])
+
+
+class DeploiementStreamlitCloud(unittest.TestCase):
+    """Secrets de Streamlit Community Cloud recopiés dans l'environnement, sans écraser une variable existante."""
+
+    def test_secrets_vers_environnement(self):
+        from unittest import mock
+        import streamlit
+        import config_env
+        secrets = {"COPILOT_DIRECTLINE_SECRET": "secret-de-test", "AMT_DEFAULT_FILE": "donnees/x.xlsx",
+                   "AMT_AGENT_DELAI": 240, "AUTRE_CLE": "ignorée"}
+        with mock.patch.dict(os.environ, {"AMT_DEFAULT_FILE": "deja-defini.xlsx"}), \
+                mock.patch.object(streamlit, "secrets", secrets):
+            for c in ("COPILOT_DIRECTLINE_SECRET", "AMT_AGENT_DELAI"):
+                os.environ.pop(c, None)
+            config_env.charger_secrets_streamlit()
+            self.assertEqual(os.environ["COPILOT_DIRECTLINE_SECRET"], "secret-de-test")
+            self.assertEqual(os.environ["AMT_AGENT_DELAI"], "240")
+            self.assertEqual(os.environ["AMT_DEFAULT_FILE"], "deja-defini.xlsx")  # jamais écrasée
+            self.assertNotIn("AUTRE_CLE", os.environ)
+
+    def test_sans_secrets(self):
+        from unittest import mock
+        import streamlit
+        import config_env
+
+        class Absent:
+            def __contains__(self, cle):
+                raise FileNotFoundError("aucun secrets.toml")
+        with mock.patch.object(streamlit, "secrets", Absent()):
+            config_env.charger_secrets_streamlit()  # aucune erreur
 
 
 class RapportAMT(unittest.TestCase):

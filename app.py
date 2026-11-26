@@ -8,17 +8,21 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+import config_env  # avant copilot et traces : Secrets de Streamlit Community Cloud -> environnement
 import copilot
 import core
 import questions
 import rapport
 import traces
 
+config_env.charger_secrets_streamlit()  # à chaque exécution : Secrets modifiés après le déploiement
+
 MENTION = "Données fictives - validation humaine requise"
 st.set_page_config(page_title="AMT - Analyse du trafic aérien", page_icon=":material/flight:", layout="wide")
 
 MOTEUR_CALCUL, MOTEUR_AGENT = traces.MOTEUR_CALCUL, traces.MOTEUR_AGENT
-for cle, defaut in {"chat": [], "chat_nouveau": False, "agent_conv": None, "agent_attente": None}.items():
+for cle, defaut in {"chat": [], "chat_nouveau": False, "agent_conv": None, "agent_attente": None,
+                    "jeu_remplace": None}.items():
     st.session_state.setdefault(cle, defaut)
 
 
@@ -302,8 +306,27 @@ def repondre_local(question, lg):
 
 
 def poser():
-    """La question part à l'agent ; l'appel réseau se fait dans la page, sous la question, avec l'indicateur."""
-    question = (st.session_state.get("chat_saisie") or "").strip()
+    """La question part à l'agent ; l'appel réseau se fait dans la page, sous la question, avec l'indicateur.
+    Un fichier joint remplace le jeu de données local (tableau de bord, exports) : il n'est jamais envoyé à
+    l'agent, qui travaille sur son propre fichier."""
+    saisie = st.session_state.get("chat_saisie")
+    fichiers = list(getattr(saisie, "files", None) or [])
+    question = (getattr(saisie, "text", saisie) or "").strip()
+    if fichiers:
+        f = fichiers[0]
+        contenu_f = f.getvalue()
+        nouvelle = traces.empreinte(contenu_f)
+        st.session_state.jeu_remplace = {"nom": f.name, "contenu": contenu_f}
+        if nouvelle != st.session_state.get("chat_fichier"):  # nouveau fichier : nouvelle conversation
+            st.session_state.update(chat=[], chat_nouveau=False, chat_fichier=nouvelle, agent_conv=None,
+                                    agent_attente=None)
+        st.toast(f"Jeu de données remplacé par {f.name}. Il n'est pas envoyé à l'agent.",
+                 icon=":material/upload_file:")
+        if question:
+            st.session_state.chat.append({"role": "user", "content": question})
+            st.session_state.agent_attente = {"question": question, "langue": questions.langue_de(question),
+                                              "fichier": f.name, "empreinte": nouvelle}
+        return
     if not question:
         return
     st.session_state.chat.append({"role": "user", "content": question})
@@ -666,7 +689,8 @@ def page_chat():
                         attente_ui["spinner"].__exit__(None, None, None)
                 st.session_state.update(agent_attente=None, chat_nouveau=True)
                 st.rerun()
-    st.chat_input("Posez votre question à l'agent AMT...", key="chat_saisie", on_submit=poser, max_chars=500)
+    st.chat_input("Posez votre question à l'agent AMT...", key="chat_saisie", on_submit=poser, max_chars=500,
+                  accept_file=True, file_type=core.FORMATS)
 
 
 # =====================================================================
@@ -681,21 +705,18 @@ page = st.navigation([P_TABLEAU, P_JOURNAL, P_CHAT], position="sidebar")
 sur_chat = page.url_path == P_CHAT.url_path
 sur_tableau = page.url_path == P_TABLEAU.url_path
 
-# Barre latérale : conversation, jeu de données, filtres, puis « Avancé » (replié).
+# Barre latérale : conversation, jeu de données, filtres.
+def revenir_jeu_agent():
+    st.session_state.jeu_remplace = None
+
+
 with st.sidebar:
     if sur_chat and (st.session_state.chat or st.session_state.agent_conv):
         st.button("Nouvelle conversation", icon=":material/edit_square:", width="stretch",
                   on_click=nouvelle_conversation)
     zone_jeu = st.container()
     zone_filtres = st.container()
-    with st.expander("Avancé", icon=":material/tune:"):
-        fichier = st.file_uploader("Remplacer le jeu de données (CSV, Excel, XML ou PDF)", type=core.FORMATS,
-                                   help="Par défaut, le jeu de données est celui de l'agent (variable "
-                                        "AMT_DEFAULT_FILE). Retirer le fichier ici pour y revenir.")
-        conv_agent = st.session_state.agent_conv
-        st.caption("Connexion à l'agent : " + ("mode secret Direct Line" if copilot.mode_secret() else
-                                               f"non configurée (variable {copilot.VAR_SECRET} absente)")
-                   + (f" ; conversation `{conv_agent.id}`" if conv_agent else ""))
+fichier = st.session_state.jeu_remplace
 
 # Le dernier fichier chargé est gardé sur disque : il sert seulement si AMT_DEFAULT_FILE n'est pas défini.
 DOSSIER_DERNIER = Path(os.environ.get("AMT_DERNIER_DIR", Path(__file__).resolve().parent / "dernier_fichier"))
@@ -738,11 +759,11 @@ def charger(contenu, nom_fichier):
     return core.nettoyer(brut)
 
 
-# Jeu de données : celui de l'agent (AMT_DEFAULT_FILE), sauf remplacement explicite dans « Avancé ».
+# Jeu de données : celui de l'agent (AMT_DEFAULT_FILE), sauf fichier joint dans la discussion.
 defaut = fichier_par_defaut()
 nom, contenu, origine = None, None, None
 if fichier is not None:
-    nom, contenu, origine = fichier.name, fichier.getvalue(), "remplace"
+    nom, contenu, origine = fichier["nom"], fichier["contenu"], "remplace"
     memoriser_octets(nom, contenu)
 elif defaut is not None:
     nom, contenu, origine = defaut.name, defaut.read_bytes(), "defaut"
@@ -761,6 +782,9 @@ with zone_jeu:
         st.caption(f":material/database: Jeu de données : **{nom}**, identique à celui de l'agent")
     elif origine == "remplace":
         st.caption(f":material/database: Jeu de données : **{nom}** (remplacé : différent de celui de l'agent)")
+        if defaut is not None:
+            st.button("Revenir au jeu de l'agent", icon=":material/undo:", type="tertiary",
+                      on_click=revenir_jeu_agent)
     elif origine == "dernier":
         st.caption(f":material/database: Jeu de données : **{nom}**")
 if df is None:
@@ -768,7 +792,7 @@ if df is None:
         page.run()
     elif contenu is None:
         st.info("Aucun jeu de données : lancez l'application avec AMT_DEFAULT_FILE (fichier de l'agent), "
-                "ou chargez un fichier dans « Avancé » (barre latérale).")
+                "ou joignez un fichier dans la page Discuter (trombone de la zone de saisie).")
     st.stop()
 
 if st.session_state.get("chat_fichier") != emp:  # nouveau fichier : nouvelle conversation
