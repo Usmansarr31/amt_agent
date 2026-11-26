@@ -605,7 +605,7 @@ class InterfaceAgentUnique(unittest.TestCase):
         self.assertEqual(recu["text"], "analyse le fichier")
         self.assertEqual(recu["fichier_recu"], {"nom": Path(ORGA).name, "taille": len(orga)})  # octets intacts
         self.assertIn("Fichier reçu par le faux serveur", at.session_state.chat[-1]["content"])
-        self.assertTrue(any("envoyé à l'agent et repris" in c.value for c in at.caption))
+        self.assertFalse(any("envoyé à l'agent" in c.value for c in at.caption))  # pas de message si tout va bien
         self.assertFalse(faux_copilot.SECRET in str(at.session_state.chat))
         # fichier illisible localement : envoyé à l'agent, pas d'erreur rouge, le tableau de bord ne change pas
         illisible = ("date,aerodrome,mouvements\n2025-01-01,DAK,10\n").encode()

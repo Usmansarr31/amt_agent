@@ -639,14 +639,10 @@ def page_chat():
                         with st.container(key=f"bulle_user_{i}", width="content"):
                             st.markdown(msg["content"])
                     piece = msg.get("piece")
-                    if piece:
+                    if piece and piece.get("refus"):  # seul le cas où le tableau de bord ne change pas est signalé
                         with st.container(horizontal=True, horizontal_alignment="right"):
-                            if piece.get("refus"):
-                                st.caption(f":material/attach_file: {piece['nom']} : envoyé à l'agent. Non repris "
-                                           f"dans le tableau de bord ({piece['refus']}).", width="content")
-                            else:
-                                st.caption(f":material/attach_file: {piece['nom']} : envoyé à l'agent et repris "
-                                           "dans le tableau de bord.", width="content")
+                            st.caption(f":material/attach_file: {piece['nom']} : envoyé à l'agent. Non repris "
+                                       f"dans le tableau de bord ({piece['refus']}).", width="content")
                 else:
                     with st.container(key=f"reponse_{i}"):
                         if i == dernier and st.session_state.chat_nouveau:
