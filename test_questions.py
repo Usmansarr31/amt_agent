@@ -28,6 +28,34 @@ def total(df, aero=None, mois=None, typ=None):
 
 
 @unittest.skipUnless(Path(ORGA).exists(), f"fichier absent : {ORGA}")
+class MoisPartielsRetires(unittest.TestCase):
+    """Le mois partiel (juillet 2026, 1 jour) est retiré de toute l'analyse, sans toucher aux règles de nettoyage."""
+
+    def test_retrait(self):
+        brut = core.lire_fichier(ORGA, ORGA)
+        df0, j0, _m0, meta0 = core.nettoyer(brut)
+        df, j, m, meta = core.nettoyer_sans_mois_partiels(brut)
+        self.assertEqual(meta["mois_partiels_retires"], [("2026-07", 1, 185.0, 8)])
+        self.assertEqual(meta["total_nettoye"], meta0["total_nettoye"] - 185)  # 110 044
+        self.assertEqual(meta["lignes_brutes"], meta0["lignes_brutes"] - 8)
+        self.assertEqual(set(m["statut"]), {"Complet"})
+        self.assertNotIn("2026-07", set(df["mois"]))
+        self.assertEqual(str(meta["date_max"].date()), "2026-06-30")
+        # journal identique (mêmes numéros de ligne du fichier d'origine)
+        self.assertEqual(j.astype(str).values.tolist(), j0.astype(str).values.tolist())
+
+    def test_rapport_sans_mois_partiel(self):
+        import rapport
+        brut = core.lire_fichier(ORGA, ORGA)
+        df, j, m, meta = core.nettoyer_sans_mois_partiels(brut)
+        A = rapport.analyser(df, j, m, meta, "f.xlsx", "x", rapport.sources_excel(Path(ORGA).read_bytes(), ORGA))
+        self.assertEqual(A["total"], 110044)
+        self.assertEqual(A["incomplets"], [])
+        self.assertNotIn("2026-07", A["mois"])
+        tb = __import__("openpyxl").load_workbook(io.BytesIO(rapport.construire_excel(A)))["Tableau de bord"]
+        self.assertIn("Mois partiel retiré de l'analyse : 2026-07", tb["B12"].value)
+
+
 class FichierOrganisateurs(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -578,7 +606,10 @@ class InterfaceAgentUnique(unittest.TestCase):
     def test_jeu_par_defaut_sans_upload(self):
         at = self.app()
         self.assertFalse(at.exception)
-        self.assertEqual(at.metric[0].value, "110 229")
+        self.assertEqual(at.metric[0].value, "110 044")  # 110 229 sans juillet 2026 (1 jour, 185 mouvements)
+        self.assertTrue(any("Mois partiel retiré de l'analyse : 2026-07 (1 jour)" in c.value for c in at.sidebar.caption))
+        self.assertFalse(at.sidebar.checkbox)  # plus de case « Inclure les mois incomplets »
+        self.assertNotIn("2026-07", at.sidebar.select_slider[0].options)
         self.assertIn("identique à celui de l'agent", at.sidebar.caption[0].value)
         self.assertFalse(at.sidebar.expander)  # plus de section « Avancé »
         self.assertFalse(at.get("file_uploader"))  # le fichier se joint dans la zone de saisie du chat
@@ -608,6 +639,7 @@ class InterfaceAgentUnique(unittest.TestCase):
         self.assertIn("Fichier reçu par le faux serveur", at.session_state.chat[-1]["content"])
         self.assertFalse(any("envoyé à l'agent" in c.value for c in at.caption))  # pas de message si tout va bien
         self.assertFalse(faux_copilot.SECRET in str(at.session_state.chat))
+        conv1 = at.session_state.agent_conv.id
         # fichier illisible localement : envoyé à l'agent, pas d'erreur rouge, le tableau de bord ne change pas
         illisible = ("date,aerodrome,mouvements\n2025-01-01,DAK,10\n").encode()
         at.chat_input[0].upload("autre.csv", illisible, "text/csv").set_value("Total ?").run()
@@ -616,6 +648,12 @@ class InterfaceAgentUnique(unittest.TestCase):
         self.assertIn("identique à celui de l'agent", at.sidebar.caption[0].value)
         self.assertTrue(any("autre.csv : envoyé à l'agent. Non repris" in c.value for c in at.caption))
         self.assertEqual([f["nom"] for f in faux_copilot.RECUS[-1]["fichiers_recus"]], ["autre.csv"])
+        # nouvelle conversation avec l'agent à chaque envoi de fichiers : pas d'ancien rapport repris
+        self.assertNotEqual(at.session_state.agent_conv.id, conv1)
+        self.assertTrue(any("Nouvelle conversation avec l'agent" in c.value for c in at.caption))
+        conv2 = at.session_state.agent_conv.id
+        at.chat_input[0].set_value("Et le retard ?").run()  # question seule : même conversation
+        self.assertEqual(at.session_state.agent_conv.id, conv2)
         # fichier valide différent : il remplace le jeu de données du tableau de bord (nouvelle conversation)
         classeur = __import__("openpyxl").load_workbook(io.BytesIO(orga))
         tampon = io.BytesIO(); classeur.properties.title = "copie"; classeur.save(tampon)

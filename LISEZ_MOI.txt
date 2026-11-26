@@ -70,7 +70,7 @@ Utilisation
   Rapport AMT (onglet Exports), au format des livrables de l'agent, sur tout le fichier :
     - bouton « Préparer le rapport (Excel et PDF) » ; mêmes fichiers dans le menu « Exporter » du chat.
     - Rapport_AMT_<date>.xlsx : feuille « Tableau de bord » (bandeau, filtres Période / Aérodrome / Catégorie,
-      5 cartes, ligne du mois incomplet, 7 graphiques ; cartes et graphiques 1 à 6 recalculés par SUMIFS selon les
+      5 cartes, ligne du mois partiel retiré, 7 graphiques ; cartes et graphiques 1 à 6 recalculés par SUMIFS selon les
       filtres), feuille masquée « _calcul », une feuille par fichier source (données nettoyées, en-têtes en
       français, filtre automatique, colonnes d'aide Mois, Mois complet, Retard × mouvements, Mouvements avec retard).
     - Rapport_AMT_<date>.pdf : page 1 tableau de bord, analyse en 10 sections (le chiffre, comment le lire, ce qu'il
@@ -140,10 +140,10 @@ Apparence
 Tests
   python test_questions.py
   (autres fichiers : AMT_FICHIER_ORGA=... AMT_FICHIER_PIEGE=... python test_questions.py)
-  Sans le fichier de la variante piégée, ses 35 tests sont ignorés ; les 46 autres doivent passer.
+  Sans le fichier de la variante piégée, ses 35 tests sont ignorés ; les 48 autres doivent passer.
 
 Chiffres de contrôle
-  Fichier des organisateurs : total nettoyé 110 229, brut 110 266, 1 anomalie (DAK-SIM, arrivées, 14/08/2025, 290) ;
+  Fichier des organisateurs : total nettoyé 110 229, brut 110 266 (110 044 analysés sans juillet 2026, mois partiel), 1 anomalie (DAK-SIM, arrivées, 14/08/2025, 290) ;
     Dakar janvier 2025 : 2 139 (1 113 arrivées, 1 026 départs) ; retards pondérés LME 14,20, NIM 13,98, ABJ 13,95, DAK 13,78.
   Variante piégée (si le fichier est fourni) : total nettoyé 55 643, brut 55 711, 2 anomalies (DLA-SIM arrivées 27/08/2025, BKO-SIM départs
     05/10/2025) ; Douala novembre 2025 : 1 512 (753 / 759) ; Bamako janvier 2026 : 1 009 ; Douala toute la période : 20 298 ;

@@ -22,7 +22,7 @@ L'application compte trois pages.
 | Comparaison | Deux périodes de même durée en mois complets (par défaut), total, moyenne par jour et écarts en % |
 | Retards | Retard moyen pondéré par le nombre de mouvements |
 | Anomalies | Détection statistique (score MAD), « Pourquoi c'est un pic » (le chiffre, comment le lire, ce qu'il montre, ce qu'il faut vérifier) pour chaque journée atypique et pour les mois de pointe et le plus calme, validation ou rejet par l'expert, registre conservé |
-| Qualité des données | Journal de nettoyage, réconciliation brut / nettoyé, mois incomplets |
+| Qualité des données | Journal de nettoyage, réconciliation brut / nettoyé, mois partiels retirés |
 | Traçabilité | Registre des décisions de l'expert, journal des échanges et fichiers reçus de l'agent |
 | Exports | Rapport `Rapport_AMT_<date>` en Excel et PDF (voir « Rapport AMT »), données nettoyées en CSV |
 
@@ -40,7 +40,7 @@ L'application compte trois pages.
 - **Doublons exacts :** retirés.
 - **Valeurs vides ou négatives :** exclues, jamais remplacées par une valeur inventée. Un zéro enregistré est conservé, et un jour absent n'est jamais compté comme zéro.
 - **Anomalie :** signalée si |score| > 6, avec score = (valeur − médiane) / (1,4826 × MAD), calculé par aérodrome et par type de mouvement.
-- **Mois incomplet :** un mois de moins de 28 jours renseignés est signalé.
+- **Mois partiel :** un mois de moins de 28 jours renseignés est retiré de toute l'analyse (totaux, graphiques, comparaisons, exports). Le fichier d'origine et les règles de nettoyage ne changent pas ; la barre latérale et l'onglet Qualité des données indiquent le mois retiré. Exemple : juillet 2026 (1 jour, 185 mouvements) ; le total analysé est alors de 110 044.
 - **Colonne `source` :** traitée comme une donnée. Un texte qui ressemble à une consigne est ignoré et signalé dans le journal de nettoyage.
 
 ## Installation
@@ -202,7 +202,7 @@ AMT_DEFAULT_FILE=donnees/DONNEES_03_ATM_ANALYSE_TRAFIC.xlsx .venv/bin/streamlit 
 .venv/bin/python test_questions.py
 ```
 
-La suite comprend 81 tests d'acceptation. Les 35 tests de la variante piégée ne tournent que si on fournit ce fichier, qui n'est pas dans le dépôt : `AMT_FICHIER_PIEGE=chemin/variante.csv .venv/bin/python test_questions.py`. Sans lui, ils sont ignorés et les 46 autres doivent passer.
+La suite comprend 83 tests d'acceptation. Les 35 tests de la variante piégée ne tournent que si on fournit ce fichier, qui n'est pas dans le dépôt : `AMT_FICHIER_PIEGE=chemin/variante.csv .venv/bin/python test_questions.py`. Sans lui, ils sont ignorés et les 48 autres doivent passer.
 
 Les tests couvrent :
 
@@ -234,7 +234,7 @@ Le bouton **« Préparer le rapport (Excel et PDF) »** de l'onglet Exports cons
   - un bandeau ;
   - des filtres Période, Aérodrome et Catégorie, en listes déroulantes avec « Tous » par défaut ;
   - 5 cartes : mouvements, retard moyen pondéré, variation N/N-1 sur les mêmes mois complets, aérodrome principal, part des arrivées ;
-  - une ligne pour le mois incomplet ;
+  - une ligne pour le mois partiel retiré de l'analyse ;
   - 7 graphiques.
 - **Recalcul par les filtres :** les cartes et les graphiques 1 à 6 se recalculent par formules `SUMIFS`, à partir de tables de calcul placées sur la feuille masquée `_calcul`.
 - **Feuilles de données :** une feuille par fichier source (trafic journalier, agrégats, référentiel), avec les données nettoyées, des en-têtes en français et un filtre automatique. La feuille du trafic reçoit les colonnes d'aide Mois, Mois complet, Retard × mouvements et Mouvements avec retard.

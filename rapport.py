@@ -135,6 +135,7 @@ def analyser(df, journal, mois_info, meta, nom_fichier="", empreinte="", sources
     A["complets"] = [m for m in A["mois"] if statut.get(m) == "Complet"]
     A["incomplets"] = [(m, float(mensuel[m]), int(jours.get(m, 0))) for m in A["mois"] if statut.get(m) != "Complet"]
     A["statut"], A["jours_mois"] = statut, jours
+    A["partiels_retires"] = list(meta.get("mois_partiels_retires") or [])  # (mois, jours, mouvements, lignes)
     comp = mensuel[A["complets"]]
     A["pointe"] = comp.idxmax() if len(comp) else None
     A["calme"] = comp.idxmin() if len(comp) else None
@@ -598,6 +599,10 @@ def construire_excel(A, registre=None, validation=None):
                            f'&" mouvements sur {j} jour(s), exclu de la variation"')
             tb[f"B{r}"].font = Font(italic=True, color=OCRE, bold=True)
             r += 1
+    elif A["partiels_retires"]:
+        tb[f"B{r}"] = "Mois partiel retiré de l'analyse : " + "; ".join(
+            f"{m} ({n0(v)} mouvements sur {j} jour(s))" for m, j, v, _l in A["partiels_retires"])
+        tb[f"B{r}"].font = Font(italic=True, color=OCRE, bold=True)
     else:
         tb[f"B{r}"] = "Aucun mois incomplet dans le fichier."
         tb[f"B{r}"].font = Font(italic=True, color="555555")
@@ -942,6 +947,9 @@ def construire_pdf(A, registre=None, validation=None):
     for m, v, j in A["incomplets"]:
         el.append(P(f"<font color='#{OCRE}'><b>dont mois incomplet {m} : {n0(v)} mouvements sur {j} jour(s), "
                     f"exclu de la variation</b></font>", "p"))
+    for m, j, v, _l in A["partiels_retires"]:
+        el.append(P(f"<font color='#{OCRE}'><b>Mois partiel retiré de l'analyse : {m} ({n0(v)} mouvements sur "
+                    f"{j} jour(s))</b></font>", "p"))
     if mv:
         el.append(P(f"Variation calculée sur {lm(mv[0])} à {lm(mv[-1])} contre les mêmes mois de "
                     f"{int(A['annee_ref']) - 1}. Fichier complet, sans filtre.", "petit"))
@@ -979,8 +987,10 @@ def construire_pdf(A, registre=None, validation=None):
     el.append(P(" ".join([p1, p2, p3, p4, p5]), "temps"))
     # 2. Volume
     inc = "; ".join(f"{lm(m)} : {n0(v)} mouvements sur {j} jour(s)" for m, v, j in A["incomplets"]) or "aucun"
+    ret = "; ".join(f"{lm(m)} ({n0(v)} mouvements sur {j} jour(s))" for m, j, v, _l in A["partiels_retires"])
     el += section(2, "Volume", f"{n0(A['total'])} mouvements au total, soit {n1(A['moyenne_jour'])} par jour en "
-                  f"moyenne sur {A['jours']} jours renseignés. Mois incomplet : {inc}.",
+                  f"moyenne sur {A['jours']} jours renseignés. "
+                  + (f"Mois partiel retiré de l'analyse : {ret}." if ret else f"Mois incomplet : {inc}."),
                   "Le vrai total additionne toutes les lignes valides, mois incomplets compris. La moyenne par jour "
                   "divise ce total par le nombre de jours qui ont des données.",
                   f"Le volume est compté sur {n0(A['lignes'])} lignes. Un mois incomplet compte dans le total "
@@ -1095,7 +1105,7 @@ def construire_pdf(A, registre=None, validation=None):
     for terme, d in (("Nettoyage", "codes normalisés ; doublons exacts retirés (première ligne gardée) ; valeurs vides "
                       "ou négatives exclues, jamais remplacées."),
                      ("Vrai total", "somme des mouvements valides, mois incomplets compris."),
-                     ("Mois complet", "au moins 28 jours renseignés ; sinon le mois est incomplet et sort des tendances."),
+                     ("Mois complet", "au moins 28 jours renseignés ; un mois partiel est retiré de toute l'analyse."),
                      ("Variation N/N-1", "même mois complets de deux années consécutives : (N ÷ N-1) − 1."),
                      ("Retard pondéré", "somme (retard × mouvements) ÷ somme des mouvements des lignes avec retard."),
                      ("Score d'anomalie", "(valeur − médiane) ÷ (1,4826 × MAD), par aérodrome et sens. "

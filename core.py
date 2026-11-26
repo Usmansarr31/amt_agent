@@ -194,6 +194,25 @@ def nettoyer(brut):
     return df, journal, mois, meta
 
 
+def nettoyer_sans_mois_partiels(brut):
+    """Nettoie (règles de nettoyer inchangées), puis retire de l'analyse les mois partiels (moins de
+    JOURS_MOIS_COMPLET jours renseignés) : leurs lignes sont écartées du fichier source et le nettoyage est
+    refait, pour que tous les chiffres (totaux bruts et nettoyés, journal, qualité) portent sur le même
+    périmètre. meta["mois_partiels_retires"] liste (mois, jours renseignés, mouvements, lignes) retirés."""
+    df, journal, mois, meta = nettoyer(brut)
+    partiels = mois.index[mois["statut"] == "INCOMPLET"].tolist()
+    if not partiels:
+        return df, journal, mois, {**meta, "mois_partiels_retires": []}
+    retires = [(m, int(mois.loc[m, "jours_couverts"]),
+                float(df.loc[df["mois"] == m, "nombre_mouvements"].sum()), int((df["mois"] == m).sum()))
+               for m in partiels]
+    mois_brut = pd.to_datetime(brut["date"], errors="coerce").dt.strftime("%Y-%m")
+    if mois_brut.isin(partiels).all():  # rien d'autre dans le fichier : on garde l'analyse telle quelle
+        return df, journal, mois, {**meta, "mois_partiels_retires": []}
+    df, journal, mois, meta = nettoyer(brut[~mois_brut.isin(partiels)])  # index gardé : n° de ligne d'origine
+    return df, journal, mois, {**meta, "mois_partiels_retires": retires}
+
+
 def totaux_mensuels(df, mois):
     p = df.pivot_table(index="mois", columns="aerodrome", values="nombre_mouvements", aggfunc="sum", fill_value=0)
     p["Total"] = p.sum(axis=1)

@@ -196,6 +196,14 @@ def section_qualite():
     q1.metric("Lignes du fichier", meta["lignes_brutes"])
     q2.metric("Lignes retenues", meta["lignes_propres"])
     q3.metric("Problèmes traités", len(journal))
+    if meta.get("mois_partiels_retires"):
+        st.subheader("Mois partiels retirés de l'analyse")
+        st.dataframe(pd.DataFrame(meta["mois_partiels_retires"],
+                                  columns=["mois", "jours_renseignes", "mouvements_nettoyes", "lignes"]),
+                     width="stretch", hide_index=True)
+        st.caption(f"Un mois compte moins de {core.JOURS_MOIS_COMPLET} jours renseignés : ses lignes sont écartées "
+                   "de tous les chiffres (totaux, graphiques, comparaisons, exports). Le fichier d'origine n'est pas "
+                   "modifié.")
     st.subheader("Journal de nettoyage")
     st.dataframe(journal, width="stretch", hide_index=True)
     st.subheader("Réconciliation brut / nettoyé par mois")
@@ -339,8 +347,13 @@ def poser():
             st.session_state.update(chat=[], chat_nouveau=False, chat_fichier=nouvelle, agent_conv=None,
                                     agent_attente=None)
         fichier_local, empreinte_locale = choisi["nom"], nouvelle
+    # Fichiers joints : toujours une nouvelle conversation avec l'agent. Sinon, il garde l'analyse validée et les
+    # rapports déjà produits dans la conversation (ses consignes) et renverrait l'ancien rapport.
+    reprise = bool(st.session_state.chat)
+    st.session_state.agent_conv = None
     st.session_state.chat.append({"role": "user", "content": question,
-                                  "piece": {"refus": refus, "ignores": ignores, "aucun_lisible": choisi is None}})
+                                  "piece": {"refus": refus, "ignores": ignores, "aucun_lisible": choisi is None,
+                                            "nouvelle_conv": reprise}})
     st.session_state.agent_attente = {"question": question, "langue": questions.langue_de(question),
                                       "fichier": fichier_local, "empreinte": empreinte_locale, "envois": envois}
 
@@ -640,6 +653,10 @@ def page_chat():
             dernier = len(st.session_state.chat) - 1
             for i, msg in enumerate(st.session_state.chat):
                 if msg["role"] == "user":
+                    if (msg.get("piece") or {}).get("nouvelle_conv"):
+                        st.divider()
+                        st.caption(":material/restart_alt: Nouvelle conversation avec l'agent : il ne reprend "
+                                   "ni l'analyse ni les rapports précédents.")
                     with st.container(horizontal=True, horizontal_alignment="right"):
                         with st.container(key=f"bulle_user_{i}", width="content"):
                             st.markdown(msg["content"])
@@ -782,7 +799,7 @@ def fichier_par_defaut():
 @st.cache_data(show_spinner="Chargement du jeu de données...")
 def charger(contenu, nom_fichier):
     brut = core.lire_fichier(io.BytesIO(contenu), nom_fichier)
-    return core.nettoyer(brut)
+    return core.nettoyer_sans_mois_partiels(brut)  # mois partiels retirés de toute l'analyse
 
 
 # Jeu de données : celui de l'agent (AMT_DEFAULT_FILE), sauf fichier joint dans la discussion.
@@ -834,24 +851,23 @@ valeurs_cat = {c: sorted(df[c].dropna().astype(str).unique()) for c in core.COLO
 # Filtres : clé liée à l'empreinte du fichier (remis à zéro si le fichier change) ; persist_state garde
 # leur valeur quand on change de page, y compris en passant par Discuter où ils sont masqués.
 with zone_filtres:
-    st.caption(f"Période du fichier : du {meta['date_min']:%d/%m/%Y} au {meta['date_max']:%d/%m/%Y}")
+    st.caption(f"Période analysée : du {meta['date_min']:%d/%m/%Y} au {meta['date_max']:%d/%m/%Y}")
+    if meta.get("mois_partiels_retires"):
+        st.caption("Mois partiel retiré de l'analyse : " + ", ".join(
+            f"{m} ({j} jour{'s' if j > 1 else ''})" for m, j, _v, _l in meta["mois_partiels_retires"]))
     if not sur_tableau:  # la discussion et le journal portent toujours sur le fichier complet
-        choix, inclure_inc, (d_deb, d_fin) = aeros, False, (tous_mois[0], tous_mois[-1])
+        choix, (d_deb, d_fin) = aeros, (tous_mois[0], tous_mois[-1])
     else:
         choix = st.multiselect("Aérodromes", aeros, default=aeros, key=f"filtre_aeros_{emp}", persist_state="session")
-        inclure_inc = st.checkbox("Inclure les mois incomplets dans les graphiques", value=False, key=f"filtre_inc_{emp}",
-                                  persist_state="session")
         d_deb, d_fin = st.select_slider("Période (mois)", options=tous_mois, value=(tous_mois[0], tous_mois[-1]),
                                         key=f"filtre_periode_{emp}", persist_state="session")
         for col, valeurs in valeurs_cat.items():
             filtres_cat[col] = st.multiselect(core.COLONNES_REPARTITION[col], valeurs, default=valeurs,
                                              key=f"filtre_{col}_{emp}", persist_state="session")
-        if incomplets and not inclure_inc:
-            st.warning("Mois incomplets exclus des graphiques : " + ", ".join(incomplets))
 
 f = df[df["aerodrome"].isin(choix) & df["mois"].between(d_deb, d_fin)]
 for col, valeurs in filtres_cat.items():
     f = f[f[col].astype(str).isin(valeurs)]
-f_graph = f if inclure_inc else f[f["statut"] == "Complet"]
+f_graph = f  # les mois partiels sont déjà retirés au chargement
 
 page.run()
