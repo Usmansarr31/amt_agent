@@ -5,7 +5,6 @@ __pycache__/
 *.pyc
 .venv/
 # Outils de l'éditeur / de l'assistant de code
-.claude/
 .agents/
 # Secrets Streamlit éventuels
 .streamlit/secrets.toml
