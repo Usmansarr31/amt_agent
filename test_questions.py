@@ -808,6 +808,20 @@ class InterfaceAgentUnique(unittest.TestCase):
         self.assertIn(nom_pdf, labels)
         relecture = [e.label for e in at.expander if e.label.startswith("Relecture")]
         self.assertEqual(relecture, ["Relecture avant livraison : contrôles réussis"])
+        # aucun mois partiel dans les exports (Excel, PDF, CSV)
+        import openpyxl, pdfplumber
+        pret = at.session_state["rapport_pret"]
+        cl = openpyxl.load_workbook(io.BytesIO(pret["xlsx"]))
+        self.assertIn("Mois partiel retiré de l'analyse : 2026-07", cl["Tableau de bord"]["B12"].value)
+        donnees = cl["Trafic journalier"]
+        valeurs = [str(c.value) for ligne in donnees.iter_rows(min_row=2) for c in ligne if c.value is not None]
+        self.assertFalse([v for v in valeurs if v.startswith("2026-07")])
+        with pdfplumber.open(io.BytesIO(pret["pdf"])) as pdf:
+            texte = "\n".join(pg.extract_text() or "" for pg in pdf.pages)
+        self.assertIn("110 044", texte)
+        self.assertNotIn("110 229", texte)
+        csv = [b for b in at.get("download_button") if b.proto.label == "Données nettoyées (CSV)"]
+        self.assertEqual(len(csv), 1)
 
     def test_agent_injoignable_secours_local(self):
         at = self.app()  # pas de secret : agent non configuré

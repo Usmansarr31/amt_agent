@@ -214,14 +214,17 @@ def section_qualite():
 
 
 @st.cache_data(max_entries=4, show_spinner=False)
-def _analyse(cle, _df, _journal, _mois, _meta, nom_f, _contenu):
+def _analyse(cle, version, _df, _journal, _mois, _meta, nom_f, _contenu):
     return rapport.analyser(_df, _journal, _mois, _meta, os.path.basename(nom_f), cle,
                             rapport.sources_excel(_contenu, nom_f))
 
 
 def analyse_courante():
-    """Chiffres du rapport sur tout le fichier, calculés une fois par version du fichier (empreinte)."""
-    return _analyse(emp, df, journal, mois_info, meta, nom, contenu)
+    """Chiffres du rapport sur tout le fichier, calculés une fois par version du fichier (empreinte) et des règles
+    de calcul (rapport.VERSION_CALCUL : une mise à jour de l'application n'en réutilise jamais un ancien résultat),
+    sur le périmètre analysé (mois partiels retirés)."""
+    return _analyse(emp, (rapport.VERSION_CALCUL, meta["total_nettoye"], meta["lignes_propres"]), df, journal,
+                    mois_info, meta, nom, contenu)
 
 
 def afficher_explication(e):
@@ -247,9 +250,9 @@ ICONES_CONTROLE = {True: ":green[:material/check_circle:]", False: ":red[:materi
 def section_exports():
     st.write("Rapport complet au format des livrables de l'agent AMT : Excel (tableau de bord à filtres, formules, "
              "données nettoyées) et PDF (tableau de bord, analyse, registre). Il porte sur tout le fichier, sans les "
-             "filtres de la barre latérale.")
+             "filtres de la barre latérale, et sans les mois partiels.")
     nom_xlsx, nom_pdf = rapport.nom_fichiers()
-    cle = (emp, len(registre()))
+    cle = (emp, len(registre()), rapport.VERSION_CALCUL, meta["total_nettoye"])
     pret = st.session_state.get("rapport_pret")
     if not pret or pret["cle"] != cle:
         if st.button("Préparer le rapport (Excel et PDF)", type="primary", icon=":material/description:"):

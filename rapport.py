@@ -116,6 +116,9 @@ def _retard(d):
     return float((x["nombre_mouvements"] * x["retard_moyen_min"]).sum() / den) if den else None
 
 
+VERSION_CALCUL = "2026-11-26.mois-partiels-retires"  # à changer quand les règles de calcul changent
+
+
 def analyser(df, journal, mois_info, meta, nom_fichier="", empreinte="", sources=None):
     """Chiffres du rapport, sur le fichier complet (sans filtre)."""
     sources = sources or {}
@@ -599,9 +602,9 @@ def construire_excel(A, registre=None, validation=None):
                            f'&" mouvements sur {j} jour(s), exclu de la variation"')
             tb[f"B{r}"].font = Font(italic=True, color=OCRE, bold=True)
             r += 1
-    elif A["partiels_retires"]:
+    elif A.get("partiels_retires"):
         tb[f"B{r}"] = "Mois partiel retiré de l'analyse : " + "; ".join(
-            f"{m} ({n0(v)} mouvements sur {j} jour(s))" for m, j, v, _l in A["partiels_retires"])
+            f"{m} ({n0(v)} mouvements sur {j} jour(s))" for m, j, v, _l in A.get("partiels_retires", []))
         tb[f"B{r}"].font = Font(italic=True, color=OCRE, bold=True)
     else:
         tb[f"B{r}"] = "Aucun mois incomplet dans le fichier."
@@ -947,7 +950,7 @@ def construire_pdf(A, registre=None, validation=None):
     for m, v, j in A["incomplets"]:
         el.append(P(f"<font color='#{OCRE}'><b>dont mois incomplet {m} : {n0(v)} mouvements sur {j} jour(s), "
                     f"exclu de la variation</b></font>", "p"))
-    for m, j, v, _l in A["partiels_retires"]:
+    for m, j, v, _l in A.get("partiels_retires", []):
         el.append(P(f"<font color='#{OCRE}'><b>Mois partiel retiré de l'analyse : {m} ({n0(v)} mouvements sur "
                     f"{j} jour(s))</b></font>", "p"))
     if mv:
@@ -987,7 +990,7 @@ def construire_pdf(A, registre=None, validation=None):
     el.append(P(" ".join([p1, p2, p3, p4, p5]), "temps"))
     # 2. Volume
     inc = "; ".join(f"{lm(m)} : {n0(v)} mouvements sur {j} jour(s)" for m, v, j in A["incomplets"]) or "aucun"
-    ret = "; ".join(f"{lm(m)} ({n0(v)} mouvements sur {j} jour(s))" for m, j, v, _l in A["partiels_retires"])
+    ret = "; ".join(f"{lm(m)} ({n0(v)} mouvements sur {j} jour(s))" for m, j, v, _l in A.get("partiels_retires", []))
     el += section(2, "Volume", f"{n0(A['total'])} mouvements au total, soit {n1(A['moyenne_jour'])} par jour en "
                   f"moyenne sur {A['jours']} jours renseignés. "
                   + (f"Mois partiel retiré de l'analyse : {ret}." if ret else f"Mois incomplet : {inc}."),
