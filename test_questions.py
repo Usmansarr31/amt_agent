@@ -686,6 +686,19 @@ class InterfaceAgentUnique(unittest.TestCase):
         self.assertEqual(sum(m["role"] == "user" for m in at.session_state.chat), 1)  # question non renvoyée
         self.assertFalse([b for b in at.button if b.label == "Récupérer la réponse"])
 
+    def test_anomalies_pourquoi_c_est_un_pic(self):
+        at = self.app()
+        self.onglet(at, "Anomalies")
+        self.assertIn("Pourquoi c'est un pic", [h.value for h in at.subheader])
+        textes = " ".join(m.value for m in at.markdown)
+        self.assertIn("Journée atypique : DAK-SIM, arrivées, jeudi 14/08/2025", textes)
+        self.assertIn("290 mouvements contre une médiane de 37, soit × 7,8. Score 34,1 pour un seuil de 6.", textes)
+        for temps in ("**Le chiffre.**", "**Comment le lire.**", "**Ce qu'il montre.**", "**Ce qu'il faut vérifier.**"):
+            self.assertIn(temps, textes)
+        self.assertIn("Mois de pointe : mars 2026", textes)
+        self.assertIn("Mois le plus calme : novembre 2025", textes)
+        self.assertIn("Cause inconnue", textes)
+
     def test_exports_sans_verrou(self):
         import rapport
         at = self.app()

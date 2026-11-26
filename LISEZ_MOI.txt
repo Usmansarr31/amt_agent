@@ -39,7 +39,7 @@ Lancement (interface unique avec l'agent Copilot Studio)
 Utilisation
   Trois pages (barre latérale) :
     Tableau de bord : indicateurs, puis un onglet par thème (seul l'onglet affiché est calculé) : Vue d'ensemble
-      (graphiques + commentaire de tendance), Comparaison, Retards, Anomalies (validation par l'expert),
+      (graphiques + commentaire de tendance), Comparaison, Retards, Anomalies (pourquoi c'est un pic, validation par l'expert),
       Qualité des données (journal, réconciliation), Traçabilité (registre de validation, journal des échanges,
       fichiers reçus de l'agent), Exports (générés au clic).
     Journal de l'agent : ce que l'agent a fait, session par session (une session = une conversation) : tableau
@@ -128,7 +128,7 @@ Apparence
 Tests
   python test_questions.py
   (autres fichiers : AMT_FICHIER_ORGA=... AMT_FICHIER_PIEGE=... python test_questions.py)
-  Sans le fichier de la variante piégée, ses 35 tests sont ignorés ; les 42 autres doivent passer.
+  Sans le fichier de la variante piégée, ses 35 tests sont ignorés ; les 43 autres doivent passer.
 
 Chiffres de contrôle
   Fichier des organisateurs : total nettoyé 110 229, brut 110 266, 1 anomalie (DAK-SIM, arrivées, 14/08/2025, 290) ;

@@ -221,6 +221,54 @@ def _pics(df, A):
     return pics
 
 
+def explication_pic(p):
+    """Pourquoi c'est un pic, par le calcul seulement (règle PICS) : titre et 4 temps, en texte simple.
+    Aucune cause ni hypothèse de cause."""
+    voisins = (f"veille {n0(p['veille']) if p['veille'] is not None else 'absente'}, "
+               f"lendemain {n0(p['lendemain']) if p['lendemain'] is not None else 'absent'}")
+    autres = ", ".join(f"{a} {n0(v)}" for a, v in p["autres_aeros"].items()) or "aucun"
+    effet = ""
+    if p["effet_variation"]:
+        avec, sans = p["effet_variation"]
+        effet = f" La variation N/N-1 passe de {pct(sans)} (pic remplacé par la médiane) à {pct(avec)} avec le pic."
+    sens = clair(p["type"]).lower()
+    autre_sens = clair("DEPART" if p["type"] == "ARRIVEE" else "ARRIVEE").lower()
+    return {
+        "titre": f"Journée atypique : {p['aerodrome']}, {sens}s, {p['jour_semaine']} {p['date']:%d/%m/%Y}",
+        "chiffre": (f"{n0(p['valeur'])} mouvements contre une médiane de {n0(p['mediane'])}, soit × {n1(p['rapport'])}. "
+                    f"Score {n1(p['score'])} pour un seuil de 6. Rang {p['rang']} sur {p['nb_jours']} jours de la série."),
+        "lire": (f"Le score mesure l'écart à la médiane habituelle de la série {p['aerodrome']} {sens}s. "
+                 "Au-delà de 6, la journée est signalée."),
+        "montre": (f"Le pic est {'isolé' if p['isole'] else 'entouré de valeurs elles aussi élevées'} ({voisins}). "
+                   f"Il pèse {pct(p['part_mois'], 1, False)} du total de {lm(p['mois'])}. Hors anomalie, le total du "
+                   f"fichier serait de {n0(p['total_hors'])}.{effet} Le même jour : {autre_sens}s {n0(p['autre_sens'])} ; "
+                   f"autres aérodromes ({sens}s) : {autres}."),
+        "verifier": (f"La valeur reste dans les totaux. Cause inconnue : vérifiez la ligne {p['ligne']} du fichier "
+                     "et validez ou rejetez l'anomalie."),
+    }
+
+
+def explications_mois(A):
+    """Mois de pointe et mois le plus calme (mois complets) : pourquoi ce sont des pics, par le calcul."""
+    mens, out = A["mensuel"], []
+    for m, nom_m in ((A["pointe"], "Mois de pointe"), (A["calme"], "Mois le plus calme")):
+        if not m:
+            continue
+        contrib = A["df"][A["df"]["mois"] == m].groupby("aerodrome")["nombre_mouvements"].sum().sort_values(ascending=False)
+        m1 = core._decaler(m, -12)
+        prec = (f"{n0(mens[m1])} en {lm(m1)}" + ("" if A["statut"].get(m1) == "Complet" else " (mois incomplet)")
+                if m1 in mens.index else "indisponible")
+        out.append({"mois": m, "titre": f"{nom_m} : {lm(m)}",
+                    "chiffre": (f"{n0(mens[m])} mouvements, soit {pct(mens[m] / A['moyenne_mensuelle'] - 1)} par rapport "
+                                f"à la moyenne mensuelle ({n0(A['moyenne_mensuelle'])})."),
+                    "lire": "On compare le mois à la moyenne des mois complets.",
+                    "montre": ("Aérodromes qui y contribuent le plus : " +
+                               ", ".join(f"{a} {n0(v)}" for a, v in contrib.head(3).items()) +
+                               f". Même mois un an plus tôt : {prec}."),
+                    "verifier": "Cause inconnue : à vérifier par l'expert."})
+    return out
+
+
 def _qualite(df, journal, meta, sources, A):
     j = journal
     q = {"doublons": j[j["probleme"] == "Doublon exact"], "vides": j[j["probleme"] == "Valeur vide"],
@@ -1006,42 +1054,12 @@ def construire_pdf(A, registre=None, validation=None):
     el.append(P("8. Pics et anomalies", "h2"))
     el.append(P("Un pic est une journée atypique (|score| > 6) ou le mois de pointe / le plus calme. Pour chaque pic, "
                 "seul le calcul explique pourquoi c'est un pic. La cause est inconnue, à vérifier par l'expert.", "temps"))
-    for p in A["pics"]:
-        voisins = (f"veille {n0(p['veille']) if p['veille'] is not None else 'absente'}, "
-                   f"lendemain {n0(p['lendemain']) if p['lendemain'] is not None else 'absent'}")
-        autres = ", ".join(f"{a} {n0(v)}" for a, v in p["autres_aeros"].items()) or "aucun"
-        effet = ""
-        if p["effet_variation"]:
-            avec, sans = p["effet_variation"]
-            effet = f" La variation N/N-1 passe de {pct(sans)} (pic remplacé par la médiane) à {pct(avec)} avec le pic."
-        el += section("8." + str(A["pics"].index(p) + 1),
-                      f"Journée atypique : {p['aerodrome']}, {clair(p['type']).lower()}s, {p['jour_semaine']} {p['date']:%d/%m/%Y}",
-                      f"{n0(p['valeur'])} mouvements contre une médiane de {n0(p['mediane'])}, soit × {n1(p['rapport'])}. "
-                      f"Score {n1(p['score'])} pour un seuil de 6. Rang {p['rang']} sur {p['nb_jours']} jours de la série.",
-                      f"Le score mesure l'écart à la médiane habituelle de la série {p['aerodrome']} "
-                      f"{clair(p['type']).lower()}s. Au-delà de 6, la journée est signalée.",
-                      f"Le pic est {'isolé' if p['isole'] else 'entouré de valeurs elles aussi élevées'} ({voisins}). "
-                      f"Il pèse {pct(p['part_mois'], 1, False)} du total de {lm(p['mois'])}. Hors anomalie, le total du "
-                      f"fichier serait de {n0(p['total_hors'])}.{effet} Le même jour : "
-                      f"{clair('DEPART' if p['type'] == 'ARRIVEE' else 'ARRIVEE').lower()}s {n0(p['autre_sens'])} ; "
-                      f"autres aérodromes ({clair(p['type']).lower()}s) : {autres}.",
-                      f"La valeur reste dans les totaux. Cause inconnue : vérifiez la ligne {p['ligne']} du fichier "
-                      "et validez ou rejetez l'anomalie.",
+    for k, p in enumerate(A["pics"], start=1):
+        e = explication_pic(p)
+        el += section(f"8.{k}", e["titre"], e["chiffre"], e["lire"], e["montre"], e["verifier"],
                       [Image(_graphique_pic(p), width=13 * cm, height=3.9 * cm), Spacer(1, 0.1 * cm)])
-    for k_m, (m, nom_m) in enumerate(((A["pointe"], "Mois de pointe"), (A["calme"], "Mois le plus calme"))):
-        if not m:
-            continue
-        contrib = A["df"][A["df"]["mois"] == m].groupby("aerodrome")["nombre_mouvements"].sum().sort_values(ascending=False)
-        m1 = core._decaler(m, -12)
-        prec = (f"{n0(mens[m1])} en {lm(m1)}" + ("" if A["statut"].get(m1) == "Complet" else " (mois incomplet)")
-                if m1 in mens.index else "indisponible")
-        el += section(f"8.{len(A['pics']) + k_m + 1}", f"{nom_m} : {lm(m)}",
-                      f"{n0(mens[m])} mouvements, soit {pct(mens[m] / A['moyenne_mensuelle'] - 1)} par rapport à la "
-                      f"moyenne mensuelle ({n0(A['moyenne_mensuelle'])}).",
-                      "On compare le mois à la moyenne des mois complets.",
-                      "Aérodromes qui y contribuent le plus : " +
-                      ", ".join(f"{a} {n0(v)}" for a, v in contrib.head(3).items()) + f". Même mois un an plus tôt : {prec}.",
-                      "Cause inconnue : à vérifier par l'expert.")
+    for k, e in enumerate(explications_mois(A), start=len(A["pics"]) + 1):
+        el += section(f"8.{k}", e["titre"], e["chiffre"], e["lire"], e["montre"], e["verifier"])
     # 9. Qualité des données
     nd, nv, nn = len(q["doublons"]), len(q["vides"]), len(q["negatifs"])
     s_dbl = float(pd.to_numeric(q["doublons"]["valeur"], errors="coerce").sum())

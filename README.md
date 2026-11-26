@@ -21,7 +21,7 @@ L'application compte trois pages.
 | Vue d'ensemble | Graphiques mensuels, commentaire de tendance automatique, répartition par catégorie de vol et origine / destination |
 | Comparaison | Deux périodes de même durée en mois complets (par défaut), total, moyenne par jour et écarts en % |
 | Retards | Retard moyen pondéré par le nombre de mouvements |
-| Anomalies | Détection statistique (score MAD), validation ou rejet par l'expert, registre conservé |
+| Anomalies | Détection statistique (score MAD), « Pourquoi c'est un pic » (le chiffre, comment le lire, ce qu'il montre, ce qu'il faut vérifier) pour chaque journée atypique et pour les mois de pointe et le plus calme, validation ou rejet par l'expert, registre conservé |
 | Qualité des données | Journal de nettoyage, réconciliation brut / nettoyé, mois incomplets |
 | Traçabilité | Registre des décisions de l'expert, journal des échanges et fichiers reçus de l'agent |
 | Exports | Rapport `Rapport_AMT_<date>` en Excel et PDF (voir « Rapport AMT »), données nettoyées en CSV |
@@ -177,7 +177,7 @@ AMT_DEFAULT_FILE=donnees/DONNEES_03_ATM_ANALYSE_TRAFIC.xlsx .venv/bin/streamlit 
 .venv/bin/python test_questions.py
 ```
 
-La suite comprend 77 tests d'acceptation. Les 35 tests de la variante piégée ne tournent que si on fournit ce fichier, qui n'est pas dans le dépôt : `AMT_FICHIER_PIEGE=chemin/variante.csv .venv/bin/python test_questions.py`. Sans lui, ils sont ignorés et les 42 autres doivent passer.
+La suite comprend 78 tests d'acceptation. Les 35 tests de la variante piégée ne tournent que si on fournit ce fichier, qui n'est pas dans le dépôt : `AMT_FICHIER_PIEGE=chemin/variante.csv .venv/bin/python test_questions.py`. Sans lui, ils sont ignorés et les 43 autres doivent passer.
 
 Les tests couvrent :
 

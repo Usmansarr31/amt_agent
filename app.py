@@ -152,6 +152,14 @@ def section_anomalies():
         pts = serie[serie["anomalie"] == 1]
         fig.add_scatter(x=pts["date"], y=pts["nombre_mouvements"], mode="markers", marker=dict(color="red", size=11), name="Anomalie à valider")
         st.plotly_chart(fig, width="stretch")
+        st.subheader("Pourquoi c'est un pic")
+        st.caption("Seul le calcul explique pourquoi la journée est signalée, sur tout le fichier. La cause est "
+                   "inconnue, à vérifier par l'expert.")
+        A = analyse_courante()
+        affiches = {(pd.Timestamp(r.date), r.aerodrome, r.type_mouvement) for r in ano.itertuples()}
+        for pic in A["pics"]:
+            if (pic["date"], pic["aerodrome"], pic["type"]) in affiches:
+                afficher_explication(rapport.explication_pic(pic))
         st.subheader("Validation par l'expert métier")
         etiquettes = [etiquette(r) for r in ano.itertuples()]
         element = st.selectbox("Élément", etiquettes)
@@ -167,6 +175,12 @@ def section_anomalies():
         if st.session_state.pop("message_registre", False):
             st.success("Décision enregistrée dans le registre (traces/registre_validation.jsonl). "
                        "Les données d'origine ne sont pas modifiées.")
+    mois_pics = rapport.explications_mois(analyse_courante())
+    if mois_pics:
+        st.subheader("Mois de pointe et mois le plus calme")
+        st.caption("Mois complets de tout le fichier. Pourquoi ce sont des pics, par le calcul ; cause inconnue.")
+        for e in mois_pics:
+            afficher_explication(e)
     reg = registre()
     if not reg.empty:
         st.subheader("Registre de validation")
@@ -187,8 +201,23 @@ def section_qualite():
     st.caption("Le total brut additionne toutes les lignes du fichier, doublons et valeurs négatives compris. Il n'est jamais présenté comme correct.")
 
 
+@st.cache_data(max_entries=4, show_spinner=False)
+def _analyse(cle, _df, _journal, _mois, _meta, nom_f, _contenu):
+    return rapport.analyser(_df, _journal, _mois, _meta, os.path.basename(nom_f), cle,
+                            rapport.sources_excel(_contenu, nom_f))
+
+
 def analyse_courante():
-    return rapport.analyser(df, journal, mois_info, meta, os.path.basename(nom), emp, rapport.sources_excel(contenu, nom))
+    """Chiffres du rapport sur tout le fichier, calculés une fois par version du fichier (empreinte)."""
+    return _analyse(emp, df, journal, mois_info, meta, nom, contenu)
+
+
+def afficher_explication(e):
+    with st.container(border=True):
+        st.markdown(f"**{e['titre']}**")
+        for libelle, cle_e in (("Le chiffre", "chiffre"), ("Comment le lire", "lire"), ("Ce qu'il montre", "montre"),
+                               ("Ce qu'il faut vérifier", "verifier")):
+            st.markdown(f"**{libelle}.** {e[cle_e]}")
 
 
 def rapport_excel():
